@@ -1,0 +1,396 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Pillar 4.1: Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Global Hardened Primitives
+    // -------------------------------------------------------------------------
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidRoomCode(code) {
+      return code is string && code.size() == 4 && code.matches('^[A-Z]{4}$');
+    }
+
+    function isValidPlayerId(id) {
+      return id is string && id.size() >= 8 && id.size() <= 64 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidNickname(name) {
+      return name is string && name.size() >= 1 && name.size() <= 16;
+    }
+
+    function isValidRole(role) {
+      return role is string && (role == 'host' || role == 'guest');
+    }
+
+    // -------------------------------------------------------------------------
+    // Pillar 2: Validation Blueprint — Room
+    // -------------------------------------------------------------------------
+    function isValidRoom(data, roomCode) {
+      return data.keys().hasAll([
+        'roomCode',
+        'matchType',
+        'status',
+        'roundNumber',
+        'hostId',
+        'hostName',
+        'hostLevel',
+        'guestId',
+        'guestName',
+        'guestLevel',
+        'matchStartAtMs',
+        'suddenDeath',
+        'winnerRole',
+        'finishReason',
+        'hostRematch',
+        'guestRematch',
+        'createdAt',
+        'updatedAt'
+      ])
+      && data.keys().hasOnly([
+        'roomCode',
+        'matchType',
+        'status',
+        'roundNumber',
+        'hostId',
+        'hostName',
+        'hostLevel',
+        'guestId',
+        'guestName',
+        'guestLevel',
+        'matchStartAtMs',
+        'suddenDeath',
+        'winnerRole',
+        'finishReason',
+        'hostRematch',
+        'guestRematch',
+        'createdAt',
+        'updatedAt'
+      ])
+      && data.roomCode == roomCode
+      && data.matchType in ['ko_2min', 'endless']
+      && data.status in ['waiting', 'countdown', 'playing', 'finished', 'abandoned']
+      && data.roundNumber is int && data.roundNumber >= 1 && data.roundNumber <= 999
+      && isValidPlayerId(data.hostId)
+      && isValidNickname(data.hostName)
+      && data.hostLevel is int && data.hostLevel >= 1 && data.hostLevel <= 300
+      && data.guestId is string && (data.guestId == '' || isValidPlayerId(data.guestId))
+      && data.guestName is string && data.guestName.size() <= 16
+      && data.guestLevel is int && data.guestLevel >= 0 && data.guestLevel <= 300
+      && ((data.guestId == '' && data.guestName == '' && data.guestLevel == 0) || (data.guestId != '' && data.guestName.size() >= 1 && data.guestLevel >= 1))
+      && data.matchStartAtMs is int && data.matchStartAtMs >= 0
+      && data.suddenDeath is bool
+      && data.winnerRole in ['', 'host', 'guest', 'draw']
+      && data.finishReason is string && data.finishReason.size() <= 80
+      && data.hostRematch is bool
+      && data.guestRematch is bool
+      && data.createdAt is timestamp
+      && data.updatedAt is timestamp;
+    }
+
+    function roomImmutableFieldsPreserved() {
+      return incoming().roomCode == existing().roomCode
+        && incoming().matchType == existing().matchType
+        && incoming().hostId == existing().hostId
+        && incoming().hostName == existing().hostName
+        && incoming().hostLevel == existing().hostLevel
+        && incoming().createdAt == existing().createdAt
+        && (existing().guestId == '' || (incoming().guestId == existing().guestId && incoming().guestName == existing().guestName && incoming().guestLevel == existing().guestLevel));
+    }
+
+    // -------------------------------------------------------------------------
+    // Pillar 2: Validation Blueprint — PlayerSyncState
+    // -------------------------------------------------------------------------
+    function isValidPlayerState(data, role) {
+      return data.keys().hasAll([
+        'role',
+        'playerId',
+        'nickname',
+        'playerLevel',
+        'roundNumber',
+        'grid',
+        'activeType',
+        'activeRot',
+        'activeX',
+        'activeY',
+        'hold',
+        'holdUsed',
+        'next3',
+        'score',
+        'level',
+        'kos',
+        'kosTaken',
+        'linesCleared',
+        'maxCombo',
+        'garbageSent',
+        'quads',
+        'piecesPlaced',
+        'combo',
+        'incomingTotal',
+        'incomingReady',
+        'nextGapCol',
+        'lastAttackLabel',
+        'bombBlastsSeq',
+        'lastBombCount',
+        'connected',
+        'heartbeatMs',
+        'updatedAt'
+      ])
+      && data.keys().hasOnly([
+        'role',
+        'playerId',
+        'nickname',
+        'playerLevel',
+        'roundNumber',
+        'grid',
+        'activeType',
+        'activeRot',
+        'activeX',
+        'activeY',
+        'hold',
+        'holdUsed',
+        'next3',
+        'score',
+        'level',
+        'kos',
+        'kosTaken',
+        'linesCleared',
+        'maxCombo',
+        'garbageSent',
+        'quads',
+        'piecesPlaced',
+        'combo',
+        'incomingTotal',
+        'incomingReady',
+        'nextGapCol',
+        'lastAttackLabel',
+        'bombBlastsSeq',
+        'lastBombCount',
+        'connected',
+        'heartbeatMs',
+        'updatedAt'
+      ])
+      && data.role == role
+      && isValidPlayerId(data.playerId)
+      && isValidNickname(data.nickname)
+      && data.playerLevel is int && data.playerLevel >= 1 && data.playerLevel <= 300
+      && data.roundNumber is int && data.roundNumber >= 1 && data.roundNumber <= 999
+      && data.grid is string && data.grid.size() == 200 && data.grid.matches('^[.IOTSZJLGB]{200}$')
+      && data.activeType in ['I', 'O', 'T', 'S', 'Z', 'J', 'L']
+      && data.activeRot is int && data.activeRot >= 0 && data.activeRot <= 3
+      && data.activeX is int && data.activeX >= -4 && data.activeX <= 12
+      && data.activeY is int && data.activeY >= -4 && data.activeY <= 24
+      && data.hold in ['', 'I', 'O', 'T', 'S', 'Z', 'J', 'L']
+      && data.holdUsed is bool
+      && data.next3 is string && data.next3.size() <= 3 && data.next3.matches('^[IOTSZJL]{0,3}$')
+      && data.score is int && data.score >= 0 && data.score <= 99999999
+      && data.level is int && data.level >= 1 && data.level <= 99
+      && data.kos is int && data.kos >= 0 && data.kos <= 999
+      && data.kosTaken is int && data.kosTaken >= 0 && data.kosTaken <= 999
+      && data.linesCleared is int && data.linesCleared >= 0 && data.linesCleared <= 99999
+      && data.maxCombo is int && data.maxCombo >= 0 && data.maxCombo <= 999
+      && data.garbageSent is int && data.garbageSent >= 0 && data.garbageSent <= 99999
+      && data.quads is int && data.quads >= 0 && data.quads <= 9999
+      && data.piecesPlaced is int && data.piecesPlaced >= 0 && data.piecesPlaced <= 99999
+      && data.combo is int && data.combo >= 0 && data.combo <= 999
+      && data.incomingTotal is int && data.incomingTotal >= 0 && data.incomingTotal <= 40
+      && data.incomingReady is int && data.incomingReady >= 0 && data.incomingReady <= 40
+      && data.nextGapCol is int && data.nextGapCol >= -1 && data.nextGapCol <= 9
+      && data.lastAttackLabel is string && data.lastAttackLabel.size() <= 48
+      && data.bombBlastsSeq is int && data.bombBlastsSeq >= 0 && data.bombBlastsSeq <= 99999
+      && data.lastBombCount is int && data.lastBombCount >= 0 && data.lastBombCount <= 20
+      && data.connected is bool
+      && data.heartbeatMs is int && data.heartbeatMs >= 0
+      && data.updatedAt is timestamp;
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection: /rooms/{roomCode}
+    // Guest quick-play rooms accessed exclusively by exact 4-letter room code.
+    // Zero collection listing, strict schema validation, immutable identities,
+    // and action-based state machine transitions.
+    // -------------------------------------------------------------------------
+    match /rooms/{roomCode} {
+      allow get: if isValidRoomCode(roomCode);
+      allow list: if false;
+      allow delete: if false;
+
+      allow create: if isValidRoomCode(roomCode)
+        && isValidRoom(incoming(), roomCode)
+        && incoming().status == 'waiting'
+        && incoming().roundNumber == 1
+        && incoming().guestId == ''
+        && incoming().guestName == ''
+        && incoming().guestLevel == 0
+        && incoming().matchStartAtMs == 0
+        && incoming().suddenDeath == false
+        && incoming().winnerRole == ''
+        && incoming().finishReason == ''
+        && incoming().hostRematch == false
+        && incoming().guestRematch == false
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && existsAfter(/databases/$(database)/documents/rooms/$(roomCode)/players/host);
+
+      allow update: if isValidRoomCode(roomCode)
+        && isValidRoom(incoming(), roomCode)
+        && roomImmutableFieldsPreserved()
+        && existing().status != 'abandoned'
+        && incoming().updatedAt == request.time
+        && (
+          // Action 1: Guest joins waiting room and initiates countdown
+          (
+            existing().status == 'waiting'
+            && existing().guestId == ''
+            && incoming().guestId != ''
+            && incoming().guestId != existing().hostId
+            && incoming().guestName.size() >= 1
+            && incoming().guestLevel >= 1
+            && incoming().status == 'countdown'
+            && incoming().matchStartAtMs > 0
+            && incoming().diff(existing()).affectedKeys().hasOnly(['guestId', 'guestName', 'guestLevel', 'status', 'matchStartAtMs', 'updatedAt'])
+            && existsAfter(/databases/$(database)/documents/rooms/$(roomCode)/players/guest)
+          )
+          // Action 2: Transition countdown -> playing
+          || (
+            existing().status == 'countdown'
+            && incoming().status == 'playing'
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+          )
+          // Action 3: Trigger Sudden Death on tie
+          || (
+            existing().status == 'playing'
+            && existing().suddenDeath == false
+            && incoming().suddenDeath == true
+            && incoming().diff(existing()).affectedKeys().hasOnly(['suddenDeath', 'updatedAt'])
+          )
+          // Action 4: Finish match (timer, Sudden Death KO, Endless finish, or disconnect forfeit)
+          || (
+            existing().status in ['countdown', 'playing']
+            && incoming().status == 'finished'
+            && incoming().winnerRole in ['host', 'guest', 'draw']
+            && incoming().finishReason.size() >= 1
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'winnerRole', 'finishReason', 'updatedAt'])
+          )
+          // Action 5a: Host requests rematch
+          || (
+            existing().status == 'finished'
+            && existing().hostRematch == false
+            && incoming().hostRematch == true
+            && incoming().diff(existing()).affectedKeys().hasOnly(['hostRematch', 'updatedAt'])
+          )
+          // Action 5b: Guest requests rematch
+          || (
+            existing().status == 'finished'
+            && existing().guestRematch == false
+            && incoming().guestRematch == true
+            && incoming().diff(existing()).affectedKeys().hasOnly(['guestRematch', 'updatedAt'])
+          )
+          // Action 6: Start next round when second player accepts rematch
+          || (
+            existing().status == 'finished'
+            && (existing().hostRematch == true || existing().guestRematch == true)
+            && incoming().status == 'countdown'
+            && incoming().roundNumber == existing().roundNumber + 1
+            && incoming().matchStartAtMs > 0
+            && incoming().suddenDeath == false
+            && incoming().winnerRole == ''
+            && incoming().finishReason == ''
+            && incoming().hostRematch == false
+            && incoming().guestRematch == false
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'status',
+              'roundNumber',
+              'matchStartAtMs',
+              'suddenDeath',
+              'winnerRole',
+              'finishReason',
+              'hostRematch',
+              'guestRematch',
+              'updatedAt'
+            ])
+          )
+          // Action 7: Terminal abandon / close room
+          || (
+            incoming().status == 'abandoned'
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'finishReason', 'updatedAt'])
+          )
+        );
+
+      // -----------------------------------------------------------------------
+      // Subcollection: /rooms/{roomCode}/players/{role}
+      // Pillar 1: Master Gate verifies parent room exists and role owns playerId
+      // -----------------------------------------------------------------------
+      match /players/{role} {
+        allow get: if isValidRoomCode(roomCode) && isValidRole(role);
+        allow list: if false;
+        allow delete: if false;
+
+        allow create: if isValidRoomCode(roomCode)
+          && isValidRole(role)
+          && isValidPlayerState(incoming(), role)
+          && incoming().updatedAt == request.time
+          && existsAfter(/databases/$(database)/documents/rooms/$(roomCode))
+          && (
+            (role == 'host' && getAfter(/databases/$(database)/documents/rooms/$(roomCode)).data.hostId == incoming().playerId)
+            || (role == 'guest' && getAfter(/databases/$(database)/documents/rooms/$(roomCode)).data.guestId == incoming().playerId)
+          );
+
+        allow update: if isValidRoomCode(roomCode)
+          && isValidRole(role)
+          && isValidPlayerState(incoming(), role)
+          && incoming().role == existing().role
+          && incoming().playerId == existing().playerId
+          && incoming().nickname == existing().nickname
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'playerLevel',
+            'roundNumber',
+            'grid',
+            'activeType',
+            'activeRot',
+            'activeX',
+            'activeY',
+            'hold',
+            'holdUsed',
+            'next3',
+            'score',
+            'level',
+            'kos',
+            'kosTaken',
+            'linesCleared',
+            'maxCombo',
+            'garbageSent',
+            'quads',
+            'piecesPlaced',
+            'combo',
+            'incomingTotal',
+            'incomingReady',
+            'nextGapCol',
+            'lastAttackLabel',
+            'bombBlastsSeq',
+            'lastBombCount',
+            'connected',
+            'heartbeatMs',
+            'updatedAt'
+          ])
+          && exists(/databases/$(database)/documents/rooms/$(roomCode))
+          && get(/databases/$(database)/documents/rooms/$(roomCode)).data.status != 'abandoned'
+          && (
+            (role == 'host' && get(/databases/$(database)/documents/rooms/$(roomCode)).data.hostId == incoming().playerId)
+            || (role == 'guest' && get(/databases/$(database)/documents/rooms/$(roomCode)).data.guestId == incoming().playerId)
+          );
+      }
+    }
+  }
+}

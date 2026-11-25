@@ -1,0 +1,6 @@
+{
+  "name": "Block Clash",
+  "description": "Fast-paced arcade competitive block-stacking battle game with AI rivals, 2-player local split-keyboard, combo garbage attacks, and procedural Web Audio SFX.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

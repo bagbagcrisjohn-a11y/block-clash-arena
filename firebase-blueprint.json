@@ -1,0 +1,313 @@
+{
+  "entities": {
+    "Room": {
+      "title": "Online Battle Room",
+      "description": "Shared 1v1 online room lobby, match lifecycle state, synchronized clock anchor, and rematch votes.",
+      "type": "object",
+      "properties": {
+        "roomCode": {
+          "type": "string",
+          "description": "4-letter uppercase room code identifier.",
+          "minLength": 4,
+          "maxLength": 4,
+          "pattern": "^[A-Z]{4}$"
+        },
+        "matchType": {
+          "type": "string",
+          "description": "Match rule format chosen by the host.",
+          "enum": ["ko_2min", "endless"]
+        },
+        "status": {
+          "type": "string",
+          "description": "Current room lifecycle state.",
+          "enum": ["waiting", "countdown", "playing", "finished", "abandoned"]
+        },
+        "roundNumber": {
+          "type": "number",
+          "description": "Monotonically increasing match round counter for rematches."
+        },
+        "hostId": {
+          "type": "string",
+          "description": "Immutable session or user ID of the room creator.",
+          "minLength": 8,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "hostName": {
+          "type": "string",
+          "description": "Public display nickname for the host player.",
+          "minLength": 1,
+          "maxLength": 16
+        },
+        "hostLevel": {
+          "type": "number",
+          "description": "Persistent profile progression level (1 to 300) of the host player."
+        },
+        "guestId": {
+          "type": "string",
+          "description": "Session or user ID of Player 2 (empty string while waiting).",
+          "maxLength": 64
+        },
+        "guestName": {
+          "type": "string",
+          "description": "Public display nickname for Player 2 (empty string while waiting).",
+          "maxLength": 16
+        },
+        "guestLevel": {
+          "type": "number",
+          "description": "Persistent profile progression level (0 while waiting, 1 to 300 once joined) of Player 2."
+        },
+        "matchStartAtMs": {
+          "type": "number",
+          "description": "Synchronized epoch timestamp (ms) when active gameplay begins."
+        },
+        "suddenDeath": {
+          "type": "boolean",
+          "description": "True when a tied 2-minute match enters Sudden Death."
+        },
+        "winnerRole": {
+          "type": "string",
+          "description": "Winning player role when match finishes.",
+          "enum": ["", "host", "guest", "draw"]
+        },
+        "finishReason": {
+          "type": "string",
+          "description": "Short human-readable reason the match concluded.",
+          "maxLength": 80
+        },
+        "hostRematch": {
+          "type": "boolean",
+          "description": "True when the host has requested a rematch."
+        },
+        "guestRematch": {
+          "type": "boolean",
+          "description": "True when the guest has requested a rematch."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the room was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the last room state change."
+        }
+      },
+      "required": [
+        "roomCode",
+        "matchType",
+        "status",
+        "roundNumber",
+        "hostId",
+        "hostName",
+        "hostLevel",
+        "guestId",
+        "guestName",
+        "guestLevel",
+        "matchStartAtMs",
+        "suddenDeath",
+        "winnerRole",
+        "finishReason",
+        "hostRematch",
+        "guestRematch",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "PlayerSyncState": {
+      "title": "Online Player Live Board State",
+      "description": "Real-time board grid, active piece, score, KO counters, garbage attack totals, and heartbeat for one player in a room.",
+      "type": "object",
+      "properties": {
+        "role": {
+          "type": "string",
+          "description": "Player slot in the room.",
+          "enum": ["host", "guest"]
+        },
+        "playerId": {
+          "type": "string",
+          "description": "Immutable session or user ID matching hostId or guestId on parent room.",
+          "minLength": 8,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "nickname": {
+          "type": "string",
+          "description": "Public display nickname for this player.",
+          "minLength": 1,
+          "maxLength": 16
+        },
+        "playerLevel": {
+          "type": "number",
+          "description": "Persistent profile progression level (1 to 300) for rank badge and trail sync."
+        },
+        "roundNumber": {
+          "type": "number",
+          "description": "Active round number this board snapshot belongs to."
+        },
+        "grid": {
+          "type": "string",
+          "description": "Compact 200-char encoding of the 20x10 visible playfield grid.",
+          "minLength": 200,
+          "maxLength": 200,
+          "pattern": "^[.IOTSZJLGB]{200}$"
+        },
+        "activeType": {
+          "type": "string",
+          "description": "Current falling tetromino type.",
+          "enum": ["I", "O", "T", "S", "Z", "J", "L"]
+        },
+        "activeRot": {
+          "type": "number",
+          "description": "Active piece rotation index (0 to 3)."
+        },
+        "activeX": {
+          "type": "number",
+          "description": "Active piece X coordinate."
+        },
+        "activeY": {
+          "type": "number",
+          "description": "Active piece Y coordinate."
+        },
+        "hold": {
+          "type": "string",
+          "description": "Held piece type or empty string.",
+          "enum": ["", "I", "O", "T", "S", "Z", "J", "L"]
+        },
+        "holdUsed": {
+          "type": "boolean",
+          "description": "Whether hold has already been used for the current drop."
+        },
+        "next3": {
+          "type": "string",
+          "description": "Next 3 tetromino types encoded as a 0-3 char string.",
+          "maxLength": 3,
+          "pattern": "^[IOTSZJL]{0,3}$"
+        },
+        "score": {
+          "type": "number",
+          "description": "Current match score."
+        },
+        "level": {
+          "type": "number",
+          "description": "Current speed level."
+        },
+        "kos": {
+          "type": "number",
+          "description": "KOs scored by this player."
+        },
+        "kosTaken": {
+          "type": "number",
+          "description": "Authoritative count of KOs suffered by this player in the current round."
+        },
+        "linesCleared": {
+          "type": "number",
+          "description": "Total lines cleared in the current round."
+        },
+        "maxCombo": {
+          "type": "number",
+          "description": "Highest combo streak achieved in the current round."
+        },
+        "garbageSent": {
+          "type": "number",
+          "description": "Monotonic cumulative garbage attack lines sent in the current round."
+        },
+        "quads": {
+          "type": "number",
+          "description": "Total 4-line Quad Smashes cleared."
+        },
+        "piecesPlaced": {
+          "type": "number",
+          "description": "Total pieces locked in the current round."
+        },
+        "combo": {
+          "type": "number",
+          "description": "Current consecutive clear combo."
+        },
+        "incomingTotal": {
+          "type": "number",
+          "description": "Total pending incoming garbage lines."
+        },
+        "incomingReady": {
+          "type": "number",
+          "description": "Incoming garbage lines ready to rise on next lock."
+        },
+        "nextGapCol": {
+          "type": "number",
+          "description": "Column index of the next incoming Bomb Block (-1 if none)."
+        },
+        "lastAttackLabel": {
+          "type": "string",
+          "description": "Human-readable description of the most recent attack.",
+          "maxLength": 48
+        },
+        "bombBlastsSeq": {
+          "type": "number",
+          "description": "Monotonic counter incremented each time this player detonates bomb blocks."
+        },
+        "lastBombCount": {
+          "type": "number",
+          "description": "Number of bomb blocks cleared in the most recent detonation."
+        },
+        "connected": {
+          "type": "boolean",
+          "description": "Live connection flag set false on clean exit."
+        },
+        "heartbeatMs": {
+          "type": "number",
+          "description": "Client epoch timestamp (ms) refreshed periodically for disconnect detection."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of this live state update."
+        }
+      },
+      "required": [
+        "role",
+        "playerId",
+        "nickname",
+        "playerLevel",
+        "roundNumber",
+        "grid",
+        "activeType",
+        "activeRot",
+        "activeX",
+        "activeY",
+        "hold",
+        "holdUsed",
+        "next3",
+        "score",
+        "level",
+        "kos",
+        "kosTaken",
+        "linesCleared",
+        "maxCombo",
+        "garbageSent",
+        "quads",
+        "piecesPlaced",
+        "combo",
+        "incomingTotal",
+        "incomingReady",
+        "nextGapCol",
+        "lastAttackLabel",
+        "bombBlastsSeq",
+        "lastBombCount",
+        "connected",
+        "heartbeatMs",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/rooms/{roomCode}": {
+      "schema": { "$ref": "#/entities/Room" },
+      "description": "Online 1v1 room metadata, match timer anchor, status transitions, and shared rematch state."
+    },
+    "/rooms/{roomCode}/players/{role}": {
+      "schema": { "$ref": "#/entities/PlayerSyncState" },
+      "description": "Per-player live board state, stats, garbage attack counters, and connection heartbeat for host and guest."
+    }
+  }
+}

@@ -17,20 +17,109 @@ service cloud.firestore {
       return resource.data;
     }
 
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && (
+        request.auth.token.email_verified == true
+        || request.auth.token.firebase.sign_in_provider == 'phone'
+        || ('phone_number' in request.auth.token && request.auth.token.phone_number is string && request.auth.token.phone_number.size() >= 7)
+      );
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 8 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
     function isValidRoomCode(code) {
       return code is string && code.size() == 4 && code.matches('^[A-Z]{4}$');
     }
 
     function isValidPlayerId(id) {
-      return id is string && id.size() >= 8 && id.size() <= 64 && id.matches('^[a-zA-Z0-9_\\-]+$');
+      return id is string && id.size() >= 8 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidPublicPlayerId(pid) {
+      return pid is string && pid.size() == 12 && pid.matches('^BC-[A-Z0-9]{4}-[A-Z0-9]{4}$');
     }
 
     function isValidNickname(name) {
       return name is string && name.size() >= 1 && name.size() <= 16;
     }
 
+    function isValidUsername(name) {
+      return name is string && name.size() >= 2 && name.size() <= 16;
+    }
+
     function isValidRole(role) {
       return role is string && (role == 'host' || role == 'guest');
+    }
+
+    // -------------------------------------------------------------------------
+    // Pillar 2: Validation Blueprint — PlayerProfile (PII-free)
+    // -------------------------------------------------------------------------
+    function isValidPlayerProfile(data, uid) {
+      return data.keys().hasAll([
+        'uid',
+        'publicPlayerId',
+        'username',
+        'avatarId',
+        'level',
+        'currentXP',
+        'totalXP',
+        'totalKOs',
+        'totalWins',
+        'totalMatches',
+        'onlineWins',
+        'onlineLosses',
+        'onlineDraws',
+        'createdAt',
+        'updatedAt'
+      ])
+      && data.keys().hasOnly([
+        'uid',
+        'publicPlayerId',
+        'username',
+        'avatarId',
+        'level',
+        'currentXP',
+        'totalXP',
+        'totalKOs',
+        'totalWins',
+        'totalMatches',
+        'onlineWins',
+        'onlineLosses',
+        'onlineDraws',
+        'createdAt',
+        'updatedAt'
+      ])
+      && data.uid == uid
+      && data.uid == request.auth.uid
+      && isValidPublicPlayerId(data.publicPlayerId)
+      && isValidUsername(data.username)
+      && data.avatarId in [
+        'crest_cyan',
+        'crest_amber',
+        'crest_crimson',
+        'crest_emerald',
+        'crest_violet',
+        'crest_cobalt',
+        'crest_gold',
+        'crest_prism'
+      ]
+      && data.level is int && data.level >= 1 && data.level <= 300
+      && data.currentXP is int && data.currentXP >= 0 && data.currentXP <= 999999
+      && data.totalXP is int && data.totalXP >= 0 && data.totalXP <= 50000000
+      && data.totalKOs is int && data.totalKOs >= 0 && data.totalKOs <= 1000000
+      && data.totalWins is int && data.totalWins >= 0 && data.totalWins <= 1000000
+      && data.totalMatches is int && data.totalMatches >= 0 && data.totalMatches <= 2000000
+      && data.onlineWins is int && data.onlineWins >= 0 && data.onlineWins <= 1000000
+      && data.onlineLosses is int && data.onlineLosses >= 0 && data.onlineLosses <= 1000000
+      && data.onlineDraws is int && data.onlineDraws >= 0 && data.onlineDraws <= 1000000
+      && data.createdAt is timestamp
+      && data.updatedAt is timestamp;
     }
 
     // -------------------------------------------------------------------------
@@ -108,6 +197,13 @@ service cloud.firestore {
         && (existing().guestId == '' || (incoming().guestId == existing().guestId && incoming().guestName == existing().guestName && incoming().guestLevel == existing().guestLevel));
     }
 
+    function isRoomParticipant() {
+      return isSignedIn() && (
+        request.auth.uid == existing().hostId
+        || (existing().guestId != '' && request.auth.uid == existing().guestId)
+      );
+    }
+
     // -------------------------------------------------------------------------
     // Pillar 2: Validation Blueprint — PlayerSyncState
     // -------------------------------------------------------------------------
@@ -182,6 +278,7 @@ service cloud.firestore {
       ])
       && data.role == role
       && isValidPlayerId(data.playerId)
+      && data.playerId == request.auth.uid
       && isValidNickname(data.nickname)
       && data.playerLevel is int && data.playerLevel >= 1 && data.playerLevel <= 300
       && data.roundNumber is int && data.roundNumber >= 1 && data.roundNumber <= 999
@@ -215,18 +312,65 @@ service cloud.firestore {
     }
 
     // -------------------------------------------------------------------------
-    // Collection: /rooms/{roomCode}
-    // Guest quick-play rooms accessed exclusively by exact 4-letter room code.
-    // Zero collection listing, strict schema validation, immutable identities,
-    // and action-based state machine transitions.
+    // Collection: /players/{uid}
+    // Strictly owner-isolated cross-device player profile & progression sync.
     // -------------------------------------------------------------------------
-    match /rooms/{roomCode} {
-      allow get: if isValidRoomCode(roomCode);
+    match /players/{uid} {
+      allow get: if isSignedIn() && isValidId(uid) && request.auth.uid == uid;
       allow list: if false;
       allow delete: if false;
 
-      allow create: if isValidRoomCode(roomCode)
+      allow create: if isVerifiedUser()
+        && isValidId(uid)
+        && request.auth.uid == uid
+        && isValidPlayerProfile(incoming(), uid)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser()
+        && isValidId(uid)
+        && request.auth.uid == uid
+        && isValidPlayerProfile(incoming(), uid)
+        && incoming().uid == existing().uid
+        && incoming().publicPlayerId == existing().publicPlayerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().totalXP >= existing().totalXP
+        && incoming().totalMatches >= existing().totalMatches
+        && (
+          // Action 1: Update customizable username & avatar
+          incoming().diff(existing()).affectedKeys().hasOnly(['username', 'avatarId', 'updatedAt'])
+          // Action 2: Sync verified progression & online stats
+          || incoming().diff(existing()).affectedKeys().hasOnly([
+            'username',
+            'avatarId',
+            'level',
+            'currentXP',
+            'totalXP',
+            'totalKOs',
+            'totalWins',
+            'totalMatches',
+            'onlineWins',
+            'onlineLosses',
+            'onlineDraws',
+            'updatedAt'
+          ])
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection: /rooms/{roomCode}
+    // Authenticated private 1v1 rooms accessed strictly by exact 4-letter code.
+    // -------------------------------------------------------------------------
+    match /rooms/{roomCode} {
+      allow get: if isVerifiedUser() && isValidRoomCode(roomCode);
+      allow list: if false;
+      allow delete: if false;
+
+      allow create: if isVerifiedUser()
+        && isValidRoomCode(roomCode)
         && isValidRoom(incoming(), roomCode)
+        && incoming().hostId == request.auth.uid
         && incoming().status == 'waiting'
         && incoming().roundNumber == 1
         && incoming().guestId == ''
@@ -242,17 +386,18 @@ service cloud.firestore {
         && incoming().updatedAt == request.time
         && existsAfter(/databases/$(database)/documents/rooms/$(roomCode)/players/host);
 
-      allow update: if isValidRoomCode(roomCode)
+      allow update: if isVerifiedUser()
+        && isValidRoomCode(roomCode)
         && isValidRoom(incoming(), roomCode)
         && roomImmutableFieldsPreserved()
         && existing().status != 'abandoned'
         && incoming().updatedAt == request.time
         && (
-          // Action 1: Guest joins waiting room and initiates countdown
+          // Action 1: Authenticated guest joins waiting room and initiates countdown
           (
             existing().status == 'waiting'
             && existing().guestId == ''
-            && incoming().guestId != ''
+            && incoming().guestId == request.auth.uid
             && incoming().guestId != existing().hostId
             && incoming().guestName.size() >= 1
             && incoming().guestLevel >= 1
@@ -261,22 +406,25 @@ service cloud.firestore {
             && incoming().diff(existing()).affectedKeys().hasOnly(['guestId', 'guestName', 'guestLevel', 'status', 'matchStartAtMs', 'updatedAt'])
             && existsAfter(/databases/$(database)/documents/rooms/$(roomCode)/players/guest)
           )
-          // Action 2: Transition countdown -> playing
+          // Action 2: Participant transitions countdown -> playing
           || (
-            existing().status == 'countdown'
+            isRoomParticipant()
+            && existing().status == 'countdown'
             && incoming().status == 'playing'
             && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
           )
-          // Action 3: Trigger Sudden Death on tie
+          // Action 3: Participant triggers Sudden Death on tie
           || (
-            existing().status == 'playing'
+            isRoomParticipant()
+            && existing().status == 'playing'
             && existing().suddenDeath == false
             && incoming().suddenDeath == true
             && incoming().diff(existing()).affectedKeys().hasOnly(['suddenDeath', 'updatedAt'])
           )
-          // Action 4: Finish match (timer, Sudden Death KO, Endless finish, or disconnect forfeit)
+          // Action 4: Participant finishes match
           || (
-            existing().status in ['countdown', 'playing']
+            isRoomParticipant()
+            && existing().status in ['countdown', 'playing']
             && incoming().status == 'finished'
             && incoming().winnerRole in ['host', 'guest', 'draw']
             && incoming().finishReason.size() >= 1
@@ -284,21 +432,24 @@ service cloud.firestore {
           )
           // Action 5a: Host requests rematch
           || (
-            existing().status == 'finished'
+            request.auth.uid == existing().hostId
+            && existing().status == 'finished'
             && existing().hostRematch == false
             && incoming().hostRematch == true
             && incoming().diff(existing()).affectedKeys().hasOnly(['hostRematch', 'updatedAt'])
           )
           // Action 5b: Guest requests rematch
           || (
-            existing().status == 'finished'
+            existing().guestId != '' && request.auth.uid == existing().guestId
+            && existing().status == 'finished'
             && existing().guestRematch == false
             && incoming().guestRematch == true
             && incoming().diff(existing()).affectedKeys().hasOnly(['guestRematch', 'updatedAt'])
           )
-          // Action 6: Start next round when second player accepts rematch
+          // Action 6: Participant starts next round when second player accepts rematch
           || (
-            existing().status == 'finished'
+            isRoomParticipant()
+            && existing().status == 'finished'
             && (existing().hostRematch == true || existing().guestRematch == true)
             && incoming().status == 'countdown'
             && incoming().roundNumber == existing().roundNumber + 1
@@ -320,37 +471,48 @@ service cloud.firestore {
               'updatedAt'
             ])
           )
-          // Action 7: Terminal abandon / close room
+          // Action 7: Participant abandons / closes room
           || (
-            incoming().status == 'abandoned'
+            isRoomParticipant()
+            && incoming().status == 'abandoned'
             && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'finishReason', 'updatedAt'])
           )
         );
 
       // -----------------------------------------------------------------------
       // Subcollection: /rooms/{roomCode}/players/{role}
-      // Pillar 1: Master Gate verifies parent room exists and role owns playerId
+      // Pillar 1: Master Gate verifies parent room exists and caller owns role
       // -----------------------------------------------------------------------
       match /players/{role} {
-        allow get: if isValidRoomCode(roomCode) && isValidRole(role);
+        allow get: if isVerifiedUser()
+          && isValidRoomCode(roomCode)
+          && isValidRole(role)
+          && exists(/databases/$(database)/documents/rooms/$(roomCode))
+          && (
+            get(/databases/$(database)/documents/rooms/$(roomCode)).data.hostId == request.auth.uid
+            || get(/databases/$(database)/documents/rooms/$(roomCode)).data.guestId == request.auth.uid
+          );
         allow list: if false;
         allow delete: if false;
 
-        allow create: if isValidRoomCode(roomCode)
+        allow create: if isVerifiedUser()
+          && isValidRoomCode(roomCode)
           && isValidRole(role)
           && isValidPlayerState(incoming(), role)
           && incoming().updatedAt == request.time
           && existsAfter(/databases/$(database)/documents/rooms/$(roomCode))
           && (
-            (role == 'host' && getAfter(/databases/$(database)/documents/rooms/$(roomCode)).data.hostId == incoming().playerId)
-            || (role == 'guest' && getAfter(/databases/$(database)/documents/rooms/$(roomCode)).data.guestId == incoming().playerId)
+            (role == 'host' && getAfter(/databases/$(database)/documents/rooms/$(roomCode)).data.hostId == request.auth.uid)
+            || (role == 'guest' && getAfter(/databases/$(database)/documents/rooms/$(roomCode)).data.guestId == request.auth.uid)
           );
 
-        allow update: if isValidRoomCode(roomCode)
+        allow update: if isVerifiedUser()
+          && isValidRoomCode(roomCode)
           && isValidRole(role)
           && isValidPlayerState(incoming(), role)
           && incoming().role == existing().role
           && incoming().playerId == existing().playerId
+          && incoming().playerId == request.auth.uid
           && incoming().nickname == existing().nickname
           && incoming().updatedAt == request.time
           && incoming().diff(existing()).affectedKeys().hasOnly([
@@ -387,8 +549,8 @@ service cloud.firestore {
           && exists(/databases/$(database)/documents/rooms/$(roomCode))
           && get(/databases/$(database)/documents/rooms/$(roomCode)).data.status != 'abandoned'
           && (
-            (role == 'host' && get(/databases/$(database)/documents/rooms/$(roomCode)).data.hostId == incoming().playerId)
-            || (role == 'guest' && get(/databases/$(database)/documents/rooms/$(roomCode)).data.guestId == incoming().playerId)
+            (role == 'host' && get(/databases/$(database)/documents/rooms/$(roomCode)).data.hostId == request.auth.uid)
+            || (role == 'guest' && get(/databases/$(database)/documents/rooms/$(roomCode)).data.guestId == request.auth.uid)
           );
       }
     }

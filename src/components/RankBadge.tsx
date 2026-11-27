@@ -86,9 +86,16 @@ export const RankBadge: React.FC<RankBadgeProps> = ({
 interface PlayerLevelCardProps {
   profile: PlayerProfile;
   theme: ThemePalette;
+  isSignedIn?: boolean;
+  onOpenAccount?: () => void;
 }
 
-export const PlayerLevelCard: React.FC<PlayerLevelCardProps> = ({ profile, theme }) => {
+export const PlayerLevelCard: React.FC<PlayerLevelCardProps> = ({
+  profile,
+  theme,
+  isSignedIn = false,
+  onOpenAccount,
+}) => {
   const tier = getRankTier(profile.level);
   const isMax = profile.level >= MAX_PLAYER_LEVEL;
   const needed = xpNeededForNextLevel(profile.level);
@@ -135,12 +142,36 @@ export const PlayerLevelCard: React.FC<PlayerLevelCardProps> = ({ profile, theme
               </span>
             )}
           </div>
-          <div className="text-[11px] font-mono-num flex items-center gap-2.5" style={{ color: theme.textMuted }}>
-            <span>{profile.nickname}</span>
+          <div className="text-[11px] font-mono-num flex items-center gap-2 flex-wrap" style={{ color: theme.textMuted }}>
+            <span style={{ color: theme.textPrimary }}>{profile.nickname}</span>
+            {isSignedIn && profile.publicPlayerId ? (
+              <>
+                <span>·</span>
+                <span style={{ color: theme.accentPrimary }}>{profile.publicPlayerId}</span>
+              </>
+            ) : (
+              <>
+                <span>·</span>
+                <span>Local Guest</span>
+              </>
+            )}
             <span>·</span>
             <span>{profile.totalWins} Wins</span>
             <span>·</span>
             <span>{profile.totalKOs} KOs</span>
+            {onOpenAccount && (
+              <>
+                <span>·</span>
+                <button
+                  type="button"
+                  onClick={onOpenAccount}
+                  className="underline underline-offset-2 font-sans font-semibold cursor-pointer"
+                  style={{ color: theme.accentPrimary }}
+                >
+                  {isSignedIn ? 'Manage Profile' : 'Sign In to Sync'}
+                </button>
+              </>
+            )}
           </div>
         </div>
       </div>

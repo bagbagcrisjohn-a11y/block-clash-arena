@@ -219,10 +219,10 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
                 {...bindButton('hold', false)}
                 style={getButtonStyle('hold')}
                 className="col-span-2 min-h-[50px] min-w-[48px] rounded-xl border-2 flex items-center justify-center gap-1 text-[11px] font-bold tracking-wide transition-transform duration-75 disabled:opacity-40 cursor-pointer whitespace-nowrap"
-                aria-label="Hold Piece"
+                aria-label="Reserve Piece"
               >
                 <Repeat2 className="w-4 h-4" />
-                <span>HOLD</span>
+                <span>RESERVE</span>
               </button>
               <button
                 type="button"
@@ -316,9 +316,9 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
             {...bindButton('hold', false)}
             style={getButtonStyle('hold')}
             className="h-12 w-13 rounded-xl border-2 flex items-center justify-center text-[10px] font-bold transition-transform duration-75 disabled:opacity-40 cursor-pointer"
-            aria-label="Hold Piece"
+            aria-label="Reserve Piece"
           >
-            HOLD
+            RES
           </button>
           <button
             type="button"
@@ -384,11 +384,11 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
             {...bindButton('hold', false)}
             style={getButtonStyle('hold')}
             className="h-12 px-2.5 min-w-[48px] rounded-xl border flex items-center justify-center gap-1 text-xs font-semibold transition-transform duration-75 focus-visible:outline-2 focus-visible:outline-offset-2 disabled:opacity-40 cursor-pointer whitespace-nowrap"
-            aria-label="Hold Piece"
-            title="Hold Piece (C / Shift)"
+            aria-label="Reserve Piece"
+            title="Reserve Piece (C / Shift)"
           >
             <Repeat2 className="w-4 h-4" />
-            <span className="hidden sm:inline">HOLD</span>
+            <span className="hidden sm:inline">RESERVE</span>
           </button>
           <button
             type="button"

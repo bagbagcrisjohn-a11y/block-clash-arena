@@ -143,6 +143,17 @@ export interface PlayerProfile {
   totalWins: number;
   totalMatches: number;
   nickname: string;
+  avatarId?: string;
+  publicPlayerId?: string | null;
+}
+
+export function hasGuestProgressToMigrate(profile: PlayerProfile): boolean {
+  return (
+    profile.totalXP > 0 ||
+    profile.totalMatches > 0 ||
+    profile.totalWins > 0 ||
+    profile.totalKOs > 0
+  );
 }
 
 export interface MatchXPLineItem {
@@ -213,6 +224,8 @@ export function createDefaultProfile(): PlayerProfile {
     totalWins: 0,
     totalMatches: 0,
     nickname: initialName,
+    avatarId: 'crest_cyan',
+    publicPlayerId: null,
   };
 }
 
@@ -239,6 +252,8 @@ export function loadPlayerProfile(): PlayerProfile {
       totalMatches:
         typeof parsed.totalMatches === 'number' ? Math.max(0, Math.floor(parsed.totalMatches)) : 0,
       nickname,
+      avatarId: typeof parsed.avatarId === 'string' ? parsed.avatarId : 'crest_cyan',
+      publicPlayerId: typeof parsed.publicPlayerId === 'string' ? parsed.publicPlayerId : null,
     };
   } catch {
     return fallback;
@@ -257,7 +272,9 @@ export function savePlayerProfile(profile: PlayerProfile): void {
 }
 
 function getWinMultiplier(mode: GameMode, difficulty: AIDifficulty): { mult: number; label: string } {
-  if (mode === 'online_1v1') return { mult: 1.75, label: 'Online 1v1 ×1.75' };
+  if (mode === 'online_1v1' || mode === 'quick_match') {
+    return { mult: 1.75, label: 'Online 1v1 ×1.75' };
+  }
   if (mode === 'local_2p') return { mult: 1.0, label: 'Local 2P ×1.0' };
   switch (difficulty) {
     case 'easy':

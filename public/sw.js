@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'block-clash-v1';
+const CACHE_VERSION = 'block-clash-v3';
 const CORE_SHELL_URLS = [
   '/',
   '/index.html',
@@ -44,7 +44,9 @@ function isFirebaseOrApiRequest(url) {
     url.hostname.includes('firebase') ||
     url.hostname.includes('identitytoolkit.googleapis.com') ||
     url.hostname.includes('securetoken.googleapis.com') ||
-    url.pathname.startsWith('/api/')
+    url.pathname.startsWith('/api/') ||
+    url.pathname.startsWith('/ws/') ||
+    url.pathname === '/health'
   );
 }
 

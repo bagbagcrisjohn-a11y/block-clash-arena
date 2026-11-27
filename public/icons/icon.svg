@@ -1,7 +1,118 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
-  <rect width="64" height="64" rx="14" fill="#090d16"/>
-  <path d="M10 22h24v10h-7v18H17V32h-7V22z" fill="#00e5ff" stroke="#7cf4ff" stroke-width="2" stroke-linejoin="round"/>
-  <circle cx="43" cy="39" r="11" fill="#ef4444" stroke="#fb923c" stroke-width="2.5"/>
-  <path d="M46 28c2-5 6-7 9-6" stroke="#fde047" stroke-width="2.8" stroke-linecap="round"/>
-  <circle cx="55" cy="22" r="3" fill="#fef08a"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0B1122"/>
+      <stop offset="55%" stop-color="#070A14"/>
+      <stop offset="100%" stop-color="#140A1E"/>
+    </linearGradient>
+    <linearGradient id="shieldRim" x1="64" y1="48" x2="448" y2="464" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#00E5C3"/>
+      <stop offset="50%" stop-color="#38BDF8"/>
+      <stop offset="100%" stop-color="#FF3B7B"/>
+    </linearGradient>
+    <linearGradient id="leftShard" x1="88" y1="120" x2="256" y2="392" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#5EEAD4"/>
+      <stop offset="48%" stop-color="#00D4C8"/>
+      <stop offset="100%" stop-color="#0F766E"/>
+    </linearGradient>
+    <linearGradient id="rightShard" x1="256" y1="120" x2="424" y2="392" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FF85B3"/>
+      <stop offset="48%" stop-color="#FF3B7B"/>
+      <stop offset="100%" stop-color="#9D174D"/>
+    </linearGradient>
+    <radialGradient id="coreGlow" cx="256" cy="256" r="108" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FEF08A" stop-opacity="0.95"/>
+      <stop offset="35%" stop-color="#F59E0B" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#F59E0B" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="hexCore" x1="204" y1="196" x2="308" y2="316" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFFBEB"/>
+      <stop offset="42%" stop-color="#FDE047"/>
+      <stop offset="100%" stop-color="#F59E0B"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Deep Arena Chassis -->
+  <rect width="512" height="512" rx="108" fill="url(#bgGrad)"/>
+
+  <!-- Subtle Geometric Grid Accent -->
+  <g stroke="#38BDF8" stroke-opacity="0.09" stroke-width="2">
+    <path d="M128 48V464M256 48V464M384 48V464M48 128H464M48 256H464M48 384H464"/>
+  </g>
+
+  <!-- Chamfered Octagonal Arena Crest Frame -->
+  <path
+    d="M156 54H356L458 156V356L356 458H156L54 356V156L156 54Z"
+    fill="#0D1426"
+    fill-opacity="0.72"
+    stroke="url(#shieldRim)"
+    stroke-width="10"
+    stroke-linejoin="round"
+  />
+  <path
+    d="M168 74H344L438 168V344L344 438H168L74 344V168L168 74Z"
+    stroke="#FFFFFF"
+    stroke-opacity="0.14"
+    stroke-width="3"
+  />
+
+  <!-- Colliding Left Energy Prism (Electric Teal) -->
+  <path
+    d="M124 166L172 118H240L212 224L154 256L212 288L240 394H172L124 346V166Z"
+    fill="url(#leftShard)"
+    stroke="#A7F3D0"
+    stroke-width="5"
+    stroke-linejoin="round"
+  />
+  <!-- Left Prism Machined Plate Accent -->
+  <path
+    d="M148 180L180 148H212L194 214L148 238V180Z"
+    fill="#FFFFFF"
+    fill-opacity="0.22"
+  />
+
+  <!-- Colliding Right Energy Prism (Plasma Coral) -->
+  <path
+    d="M388 166L340 118H272L300 224L358 256L300 288L272 394H340L388 346V166Z"
+    fill="url(#rightShard)"
+    stroke="#FECDD3"
+    stroke-width="5"
+    stroke-linejoin="round"
+  />
+  <!-- Right Prism Machined Plate Accent -->
+  <path
+    d="M364 180L332 148H300L318 214L364 238V180Z"
+    fill="#FFFFFF"
+    fill-opacity="0.18"
+  />
+
+  <!-- Central Kinetic Clash Glow -->
+  <circle cx="256" cy="256" r="108" fill="url(#coreGlow)"/>
+
+  <!-- Diagonal Clash Lightning Seam -->
+  <path
+    d="M276 92L242 204H282L236 420"
+    stroke="#FEF08A"
+    stroke-width="7"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    stroke-opacity="0.88"
+  />
+
+  <!-- Signature Hexagonal Energy Core -->
+  <polygon
+    points="256,184 318,220 318,292 256,328 194,292 194,220"
+    fill="#12182B"
+    stroke="url(#hexCore)"
+    stroke-width="10"
+    stroke-linejoin="round"
+  />
+  <polygon
+    points="256,210 296,233 296,279 256,302 216,279 216,233"
+    fill="url(#hexCore)"
+  />
+  <polygon
+    points="256,228 280,242 280,270 256,284 232,270 232,242"
+    fill="#FFFBEB"
+  />
 </svg>

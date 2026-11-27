@@ -244,12 +244,12 @@ export const OnlineLobbyScreen: React.FC<OnlineLobbyScreenProps> = ({
                     className="text-sm font-semibold block"
                     style={{ color: theme.textPrimary }}
                   >
-                    Guest Nickname
+                    Player Callsign
                   </label>
                   <RankBadge level={playerLevel} size="sm" showRankName />
                 </div>
                 <p className="text-xs" style={{ color: theme.textMuted }}>
-                  No account required — your callsign, Level &amp; Rank Badge sync live to your opponent.
+                  Verified account — your callsign, Level &amp; Rank Badge sync live to your opponent.
                 </p>
               </div>
               <input

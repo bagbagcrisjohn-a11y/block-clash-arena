@@ -298,16 +298,124 @@
         "heartbeatMs",
         "updatedAt"
       ]
+    },
+    "PlayerProfile": {
+      "title": "Authenticated Player Cloud Profile",
+      "description": "PII-free cross-device player profile with immutable Permanent Player ID, customizable username and Arena Crest avatar, level/XP progression, and verified online W/L/D counters.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Immutable Firebase Auth UID of the profile owner.",
+          "minLength": 8,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "publicPlayerId": {
+          "type": "string",
+          "description": "Immutable permanent public Player ID in BC-XXXX-XXXX format.",
+          "minLength": 12,
+          "maxLength": 12,
+          "pattern": "^BC-[A-Z0-9]{4}-[A-Z0-9]{4}$"
+        },
+        "username": {
+          "type": "string",
+          "description": "Customizable public display callsign.",
+          "minLength": 2,
+          "maxLength": 16
+        },
+        "avatarId": {
+          "type": "string",
+          "description": "Selected original Arena Crest avatar preset.",
+          "enum": [
+            "crest_cyan",
+            "crest_amber",
+            "crest_crimson",
+            "crest_emerald",
+            "crest_violet",
+            "crest_cobalt",
+            "crest_gold",
+            "crest_prism"
+          ]
+        },
+        "level": {
+          "type": "number",
+          "description": "Player progression level (1 to 300)."
+        },
+        "currentXP": {
+          "type": "number",
+          "description": "Current XP progress within active level."
+        },
+        "totalXP": {
+          "type": "number",
+          "description": "Cumulative career XP earned."
+        },
+        "totalKOs": {
+          "type": "number",
+          "description": "Cumulative career KOs scored."
+        },
+        "totalWins": {
+          "type": "number",
+          "description": "Cumulative career match victories."
+        },
+        "totalMatches": {
+          "type": "number",
+          "description": "Cumulative career matches completed."
+        },
+        "onlineWins": {
+          "type": "number",
+          "description": "Verified online 1v1 wins."
+        },
+        "onlineLosses": {
+          "type": "number",
+          "description": "Verified online 1v1 losses."
+        },
+        "onlineDraws": {
+          "type": "number",
+          "description": "Verified online 1v1 draws."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the cloud profile was first created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the latest profile update."
+        }
+      },
+      "required": [
+        "uid",
+        "publicPlayerId",
+        "username",
+        "avatarId",
+        "level",
+        "currentXP",
+        "totalXP",
+        "totalKOs",
+        "totalWins",
+        "totalMatches",
+        "onlineWins",
+        "onlineLosses",
+        "onlineDraws",
+        "createdAt",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
+    "/players/{uid}": {
+      "schema": { "$ref": "#/entities/PlayerProfile" },
+      "description": "Owner-isolated cross-device player profile, immutable Permanent Player ID, customizable avatar/username, and progression sync."
+    },
     "/rooms/{roomCode}": {
       "schema": { "$ref": "#/entities/Room" },
-      "description": "Online 1v1 room metadata, match timer anchor, status transitions, and shared rematch state."
+      "description": "Authenticated online 1v1 room metadata, match timer anchor, status transitions, and shared rematch state."
     },
     "/rooms/{roomCode}/players/{role}": {
       "schema": { "$ref": "#/entities/PlayerSyncState" },
-      "description": "Per-player live board state, stats, garbage attack counters, and connection heartbeat for host and guest."
+      "description": "Per-player live board state, stats, garbage attack counters, and connection heartbeat for authenticated host and guest."
     }
   }
 }

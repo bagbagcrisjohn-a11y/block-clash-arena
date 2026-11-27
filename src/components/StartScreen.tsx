@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
-import { Globe, Play, ShieldCheck, Volume2, VolumeX, WifiOff } from 'lucide-react';
+import { Globe, LogIn, Play, ShieldCheck, Sparkles, Volume2, VolumeX, WifiOff } from 'lucide-react';
 import { AI_PROFILES, THEMES, ThemePalette } from '../game/constants';
 import { PlayerProfile } from '../game/progression';
+import { getSkinById, PREMIUM_SKIN_CATALOG, TileSkinId } from '../game/skins';
 import { AIDifficulty, GameMode, MatchConfig, MatchType, PieceType, ThemeId } from '../game/types';
 import { PiecePreviewCanvas } from './PiecePreviewCanvas';
+import { PlayerAvatar } from './PlayerAvatar';
 import { PrivacyPolicyModal } from './PrivacyPolicyModal';
 import { PWAInstallButton } from './PWAInstallButton';
 import { PlayerLevelCard } from './RankBadge';
@@ -11,6 +13,14 @@ import { PlayerLevelCard } from './RankBadge';
 interface StartScreenProps {
   config: MatchConfig;
   profile: PlayerProfile;
+  isSignedIn: boolean;
+  equippedSkinId: TileSkinId;
+  ownedSkinsCount: number;
+  reducedEffects: boolean;
+  onOpenAuth: () => void;
+  onOpenAccount: () => void;
+  onOpenShop: () => void;
+  onPlayOnlineQuickMatch: () => void;
   onChangeConfig: (next: MatchConfig) => void;
   onStart: () => void;
   muted: boolean;
@@ -25,6 +35,14 @@ const SHOWCASE_PIECES: PieceType[] = ['T', 'I', 'L', 'Z', 'O', 'S', 'J'];
 export const StartScreen: React.FC<StartScreenProps> = ({
   config,
   profile,
+  isSignedIn,
+  equippedSkinId,
+  ownedSkinsCount,
+  reducedEffects,
+  onOpenAuth,
+  onOpenAccount,
+  onOpenShop,
+  onPlayOnlineQuickMatch,
   onChangeConfig,
   onStart,
   muted,
@@ -33,6 +51,7 @@ export const StartScreen: React.FC<StartScreenProps> = ({
 }) => {
   const [showPrivacyPolicy, setShowPrivacyPolicy] = useState(false);
   const theme: ThemePalette = THEMES[config.theme];
+  const equippedSkin = getSkinById(equippedSkinId);
 
   const setMode = (mode: GameMode) => onChangeConfig({ ...config, mode });
   const setDifficulty = (difficulty: AIDifficulty) => onChangeConfig({ ...config, difficulty });
@@ -52,11 +71,49 @@ export const StartScreen: React.FC<StartScreenProps> = ({
         className="w-full max-w-[1160px] mx-auto px-6 py-5 flex items-center justify-between gap-6 border-b"
         style={{ borderColor: theme.border }}
       >
-        <div className="font-display text-xl font-bold tracking-tight whitespace-nowrap shrink-0">
-          Block Clash: Arena
+        <div className="flex items-center gap-2.5 whitespace-nowrap shrink-0">
+          <img
+            src="/icons/icon-192.png"
+            alt="Block Clash Arena Crest"
+            referrerPolicy="no-referrer"
+            className="w-8 h-8 rounded-lg object-cover shrink-0 border"
+            style={{ borderColor: theme.borderStrong }}
+          />
+          <span className="font-display text-xl font-bold tracking-tight">
+            Block Clash: Arena
+          </span>
         </div>
 
         <div className="flex items-center gap-2.5 shrink-0">
+          {isSignedIn ? (
+            <button
+              type="button"
+              onClick={onOpenAccount}
+              className="h-10 pl-1.5 pr-3 rounded-lg border flex items-center gap-2 text-xs sm:text-sm font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2"
+              style={{
+                backgroundColor: theme.surfaceElevated,
+                borderColor: theme.accentPrimary,
+                color: theme.textPrimary,
+              }}
+            >
+              <PlayerAvatar avatarId={profile.avatarId} size="xs" />
+              <span className="max-w-[110px] truncate">{profile.nickname}</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={onOpenAuth}
+              className="h-10 px-3.5 rounded-lg border flex items-center gap-2 text-xs sm:text-sm font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2"
+              style={{
+                backgroundColor: theme.surfaceElevated,
+                borderColor: theme.accentPrimary,
+                color: theme.accentPrimary,
+              }}
+            >
+              <LogIn className="w-4 h-4" />
+              <span>Sign In</span>
+            </button>
+          )}
           <PWAInstallButton theme={theme} />
           <button
             type="button"
@@ -70,7 +127,7 @@ export const StartScreen: React.FC<StartScreenProps> = ({
             aria-label={muted ? 'Unmute sound effects' : 'Mute sound effects'}
           >
             {muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
-            <span>{muted ? 'Sound Off' : 'Sound On'}</span>
+            <span className="hidden sm:inline">{muted ? 'Sound Off' : 'Sound On'}</span>
           </button>
         </div>
       </header>
@@ -78,7 +135,12 @@ export const StartScreen: React.FC<StartScreenProps> = ({
       {/* Main Content */}
       <main className="w-full max-w-[1160px] mx-auto px-6 py-6 md:py-10 flex-1 flex flex-col justify-center gap-6">
         {/* Persistent Player Level 1-300 Card */}
-        <PlayerLevelCard profile={profile} theme={theme} />
+        <PlayerLevelCard
+          profile={profile}
+          theme={theme}
+          isSignedIn={isSignedIn}
+          onOpenAccount={isSignedIn ? onOpenAccount : onOpenAuth}
+        />
 
         <div className="w-full grid grid-cols-1 lg:grid-cols-12 gap-10 lg:gap-12 items-start">
           {/* Left Column: Title, Showcase & Controls */}
@@ -104,25 +166,36 @@ export const StartScreen: React.FC<StartScreenProps> = ({
                 className="text-base leading-relaxed max-w-md"
                 style={{ color: theme.textSecondary }}
               >
-                Face off in a live split-screen arena. Chain multi-line clears to launch garbage
-                lines across the divider, cancel incoming attacks, and outscore your rival in KOs.
+                Face off in a live split-screen arena. Chain multi-line clears to fire Breach
+                rows across the divider, counter incoming surges, and outscore your rival in KOs.
               </p>
             </div>
 
-            {/* Live Theme Piece Preview Strip */}
+            {/* Live Tile Skin & Palette Piece Preview Strip */}
             <div
-              className="rounded-xl border p-4"
+              className="rounded-xl border p-4 space-y-3"
               style={{
                 backgroundColor: theme.surfaceBg,
-                borderColor: theme.border,
+                borderColor:
+                  equippedSkinId !== 'classic' ? `${equippedSkin.accentColor}66` : theme.border,
               }}
             >
-              <div className="flex items-center justify-between mb-3">
-                <span className="text-xs font-semibold" style={{ color: theme.textMuted }}>
-                  Active Palette · {theme.name}
-                </span>
-                <span className="text-xs font-mono-num" style={{ color: theme.textMuted }}>
-                  10×20 · 7-Bag SRS
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-xs font-semibold truncate" style={{ color: theme.textMuted }}>
+                  Active Tile Skin ·{' '}
+                  <span
+                    style={{
+                      color:
+                        equippedSkinId !== 'classic'
+                          ? equippedSkin.accentColor
+                          : theme.textPrimary,
+                    }}
+                  >
+                    {equippedSkin.name}
+                  </span>
+                </div>
+                <span className="text-xs font-mono-num shrink-0" style={{ color: theme.textMuted }}>
+                  Clash Arena · Live Grid
                 </span>
               </div>
               <div className="grid grid-cols-7 gap-1 items-center">
@@ -131,11 +204,36 @@ export const StartScreen: React.FC<StartScreenProps> = ({
                     key={piece}
                     piece={piece}
                     theme={theme}
+                    skinId={equippedSkinId}
+                    reducedEffects={reducedEffects}
+                    animate={!reducedEffects && equippedSkin.isAnimated}
                     cellSize={10}
                     width={46}
                     height={32}
                   />
                 ))}
+              </div>
+              <div
+                className="pt-2.5 border-t flex items-center justify-between gap-3"
+                style={{ borderColor: theme.border }}
+              >
+                <span className="text-xs truncate" style={{ color: theme.textMuted }}>
+                  {ownedSkinsCount} / {PREMIUM_SKIN_CATALOG.length} Premium Collections Owned
+                </span>
+                <button
+                  type="button"
+                  onClick={onOpenShop}
+                  className="h-9 px-3.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2"
+                  style={{
+                    backgroundColor: theme.surfaceElevated,
+                    borderColor: theme.accentPrimary,
+                    color: theme.textPrimary,
+                    boxShadow: theme.blockGlow ? `0 0 14px ${theme.accentPrimary}28` : 'none',
+                  }}
+                >
+                  <Sparkles className="w-3.5 h-3.5" style={{ color: theme.accentPrimary }} />
+                  <span>Tile Skin Shop</span>
+                </button>
               </div>
             </div>
 
@@ -155,20 +253,20 @@ export const StartScreen: React.FC<StartScreenProps> = ({
                   </div>
                   <div className="flex justify-between">
                     <span>Double (2 Lines)</span>
-                    <span className="font-mono-num font-semibold">+1 Garbage</span>
+                    <span className="font-mono-num font-semibold">+1 Breach</span>
                   </div>
                   <div className="flex justify-between">
                     <span>Triple (3 Lines)</span>
-                    <span className="font-mono-num font-semibold">+2 Garbage</span>
+                    <span className="font-mono-num font-semibold">+2 Breach</span>
                   </div>
                   <div className="flex justify-between">
                     <span>Quad Smash (4)</span>
-                    <span className="font-mono-num font-semibold">+4 Garbage</span>
+                    <span className="font-mono-num font-semibold">+4 Breach</span>
                   </div>
                 </div>
                 <p className="text-xs mt-2.5 leading-relaxed" style={{ color: theme.textMuted }}>
-                  Incoming garbage rows contain glowing <strong style={{ color: '#FB923C' }}>Bomb Blocks</strong>.
-                  Drop a piece onto an exposed bomb or clear an adjacent line to trigger a chain blast!
+                  Incoming breach rows contain volatile <strong style={{ color: '#FBBF24' }}>Energy Cores</strong>.
+                  Drop a piece onto an exposed core or clear an adjacent line to trigger a chain blast!
                 </p>
               </div>
 
@@ -187,7 +285,7 @@ export const StartScreen: React.FC<StartScreenProps> = ({
                     <div>Rotate CW: Up or X</div>
                     <div>Rotate CCW: Z</div>
                     <div>Hard Drop: Space</div>
-                    <div>Hold Piece: C or Shift</div>
+                    <div>Reserve Piece: C or Shift</div>
                     <div>{config.mode === 'online_1v1' ? 'Touch: Mobile Ready' : 'Pause: P or Esc'}</div>
                   </div>
                 ) : (
@@ -199,7 +297,7 @@ export const StartScreen: React.FC<StartScreenProps> = ({
                       <div>Move / Soft: A, D, S</div>
                       <div>Rotate: W (CW), Q (CCW)</div>
                       <div>Hard Drop: Space</div>
-                      <div>Hold: C or Left Shift</div>
+                      <div>Reserve: C or Left Shift</div>
                     </div>
                     <div className="space-y-1">
                       <div className="font-semibold" style={{ color: theme.accentP2 }}>
@@ -208,7 +306,7 @@ export const StartScreen: React.FC<StartScreenProps> = ({
                       <div>Move / Soft: Arrow Keys</div>
                       <div>Rotate: Up (CW), / (CCW)</div>
                       <div>Hard Drop: Enter</div>
-                      <div>Hold: Right Shift or .</div>
+                      <div>Reserve: Right Shift or .</div>
                     </div>
                   </div>
                 )}
@@ -224,14 +322,50 @@ export const StartScreen: React.FC<StartScreenProps> = ({
               borderColor: theme.border,
             }}
           >
+            {/* Featured Instant Action: PLAY 1V1 ONLINE (Automatic Matchmaking) */}
+            <div
+              className="rounded-xl border p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+              style={{
+                backgroundColor: theme.surfaceElevated,
+                borderColor: theme.accentPrimary,
+                boxShadow: theme.blockGlow ? `0 0 24px ${theme.accentPrimary}26` : 'none',
+              }}
+            >
+              <div className="space-y-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <Globe className="w-4 h-4 shrink-0" style={{ color: theme.accentPrimary }} />
+                  <h2 className="font-display text-base font-bold tracking-wide">
+                    Automatic 1v1 Online Matchmaking
+                  </h2>
+                </div>
+                <p className="text-xs leading-relaxed" style={{ color: theme.textSecondary }}>
+                  No room codes needed. Enter the queue and pair automatically against a real online
+                  opponent with server-validated results.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={onPlayOnlineQuickMatch}
+                className="h-12 px-5 rounded-xl font-display text-sm font-bold tracking-wide flex items-center justify-center gap-2 transition-transform active:scale-[0.98] cursor-pointer whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2"
+                style={{
+                  backgroundColor: theme.accentPrimary,
+                  color: theme.accentPrimaryText,
+                  boxShadow: theme.blockGlow ? `0 6px 22px ${theme.accentPrimary}44` : 'none',
+                }}
+              >
+                <Globe className="w-4 h-4" />
+                <span>PLAY 1V1 ONLINE</span>
+              </button>
+            </div>
+
             {/* 1. Game Mode */}
             <section className="space-y-3">
               <div className="flex items-baseline justify-between">
                 <h2 className="text-sm font-semibold" style={{ color: theme.textPrimary }}>
-                  Game Mode
+                  Other Game Modes
                 </h2>
                 <span className="text-xs" style={{ color: theme.textMuted }}>
-                  Choose your opponent
+                  AI, Local 2P, or Private Room
                 </span>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -293,10 +427,10 @@ export const StartScreen: React.FC<StartScreenProps> = ({
                 >
                   <div className="font-display font-bold text-sm tracking-wide flex items-center gap-1.5">
                     <Globe className="w-4 h-4 shrink-0" style={{ color: theme.accentPrimary }} />
-                    <span>ONLINE 1V1</span>
+                    <span>PRIVATE ROOM</span>
                   </div>
                   <div className="text-xs mt-1" style={{ color: theme.textMuted }}>
-                    Room Code battle across separate phones or PCs
+                    4-letter Room Code battle with a specific friend
                   </div>
                 </button>
               </div>
@@ -440,7 +574,7 @@ export const StartScreen: React.FC<StartScreenProps> = ({
 
             {/* Primary Action */}
             <div className="pt-2 space-y-3">
-              {offlineOnlineNotice && config.mode === 'online_1v1' && (
+              {offlineOnlineNotice && (
                 <div
                   className="rounded-xl border px-3.5 py-2.5 flex items-start gap-2.5 text-xs leading-relaxed"
                   style={{
@@ -468,7 +602,7 @@ export const StartScreen: React.FC<StartScreenProps> = ({
                 {config.mode === 'online_1v1' ? (
                   <>
                     <Globe className="w-5 h-5" />
-                    <span>Open Online 1v1 (Room Code)</span>
+                    <span>Open Private Room Code (1v1)</span>
                   </>
                 ) : (
                   <>

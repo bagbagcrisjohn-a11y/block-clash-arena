@@ -2,14 +2,14 @@
   "id": "/",
   "name": "Block Clash: Arena",
   "short_name": "Block Clash",
-  "description": "Fast-paced 1v1 competitive block-stacking battle game with bomb garbage attacks and online room battles.",
+  "description": "Fast-paced 1v1 competitive block-clash arena with volatile energy core attacks and automatic online matchmaking.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "display_override": ["standalone", "minimal-ui"],
   "orientation": "any",
-  "background_color": "#090d16",
-  "theme_color": "#00e5ff",
+  "background_color": "#070913",
+  "theme_color": "#00e5c3",
   "categories": ["games", "arcade", "puzzle"],
   "icons": [
     {

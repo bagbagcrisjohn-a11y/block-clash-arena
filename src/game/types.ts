@@ -1,11 +1,18 @@
 export type PieceType = 'I' | 'O' | 'T' | 'S' | 'Z' | 'J' | 'L';
 export type CellValue = PieceType | 'G' | 'B' | null; // 'G' = Garbage block, 'B' = Garbage Bomb block
 
-export type GameMode = 'vs_ai' | 'local_2p' | 'online_1v1';
+export type GameMode = 'vs_ai' | 'local_2p' | 'online_1v1' | 'quick_match';
 export type MatchType = 'ko_2min' | 'endless';
 export type AIDifficulty = 'easy' | 'medium' | 'hard' | 'master';
 export type ThemeId = 'neon' | 'retro' | 'modern';
-export type GamePhase = 'TITLE' | 'ONLINE_LOBBY' | 'COUNTDOWN' | 'PLAYING' | 'PAUSED' | 'SUMMARY';
+export type GamePhase =
+  | 'TITLE'
+  | 'MATCHMAKING'
+  | 'ONLINE_LOBBY'
+  | 'COUNTDOWN'
+  | 'PLAYING'
+  | 'PAUSED'
+  | 'SUMMARY';
 
 export type PlayerId = 'p1' | 'p2';
 export type OnlineRole = 'host' | 'guest';

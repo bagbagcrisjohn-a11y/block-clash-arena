@@ -7,7 +7,7 @@ import {
   updateDoc,
   writeBatch,
 } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from '../firebase';
+import { auth, db, handleFirestoreError, OperationType } from '../firebase';
 import { BUFFER_ROWS, COLS, TOTAL_ROWS, VISIBLE_ROWS } from './constants';
 import {
   CellValue,
@@ -211,7 +211,11 @@ export async function createOnlineRoom(
   matchType: MatchType,
   initialBoard: PlayerBoardState
 ): Promise<{ roomCode: string; playerId: string; nickname: string }> {
-  const playerId = getOrCreateGuestPlayerId();
+  const currentUser = auth.currentUser;
+  if (!currentUser) {
+    throw new Error('Please sign in to create an Online 1v1 Room.');
+  }
+  const playerId = currentUser.uid;
   const nickname = sanitizeNickname(rawNickname, 'Player 1');
   const safeHostLevel = clampInt(hostLevel, 1, 300);
   saveNickname(nickname);
@@ -301,7 +305,11 @@ export async function joinOnlineRoom(
     throw new Error('Please enter a valid 4-letter Room Code.');
   }
 
-  const playerId = getOrCreateGuestPlayerId();
+  const currentUser = auth.currentUser;
+  if (!currentUser) {
+    throw new Error('Please sign in to join an Online 1v1 Room.');
+  }
+  const playerId = currentUser.uid;
   const nickname = sanitizeNickname(rawNickname, 'Player 2');
   const safeGuestLevel = clampInt(guestLevel, 1, 300);
   saveNickname(nickname);

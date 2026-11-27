@@ -35,7 +35,7 @@ export const GarbageMeter: React.FC<GarbageMeterProps> = ({
           border: `1px solid ${incomingLines > 0 ? theme.danger : theme.border}`,
         }}
         role="meter"
-        aria-label="Incoming garbage lines"
+        aria-label="Incoming breach rows"
         aria-valuemin={0}
         aria-valuemax={VISIBLE_ROWS}
         aria-valuenow={incomingLines}
@@ -96,8 +96,8 @@ export const GarbageMeter: React.FC<GarbageMeterProps> = ({
         }}
         title={
           incomingLines > 0 && nextGapCol !== null
-            ? `${incomingLines} incoming garbage lines (Bomb Block at column ${nextGapCol + 1})`
-            : 'No incoming garbage'
+            ? `${incomingLines} incoming breach rows (Energy Core at column ${nextGapCol + 1})`
+            : 'No incoming breach rows'
         }
       >
         {incomingLines > 0 ? `+${incomingLines}` : '0'}
@@ -109,7 +109,7 @@ export const GarbageMeter: React.FC<GarbageMeterProps> = ({
         }}
         aria-hidden={incomingLines === 0}
       >
-        {nextGapCol !== null ? `B${nextGapCol + 1}` : '—'}
+        {nextGapCol !== null ? `C${nextGapCol + 1}` : '—'}
       </span>
     </div>
   );

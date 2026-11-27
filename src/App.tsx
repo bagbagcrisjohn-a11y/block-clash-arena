@@ -1,15 +1,36 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { onAuthStateChanged, User } from 'firebase/auth';
 import { Unsubscribe } from 'firebase/firestore';
 import { Flag, Home, Pause, Play, RotateCcw, Volume2, VolumeX, WifiOff } from 'lucide-react';
 import { soundEngine } from './audio/soundEngine';
 import { ArenaVFXCanvas } from './components/ArenaVFXCanvas';
+import { AuthModal } from './components/AuthModal';
 import { MatchSummaryModal, OnlineRematchState } from './components/MatchSummaryModal';
+import {
+  MatchedOpponentBanner,
+  MatchmakingScreen,
+  MatchmakingUiStatus,
+} from './components/MatchmakingScreen';
 import { OnlineLobbyScreen } from './components/OnlineLobbyScreen';
 import { PiecePreviewCanvas } from './components/PiecePreviewCanvas';
+import { PlayerAccountModal } from './components/PlayerAccountModal';
 import { PlayerArenaPanel, PlayerHudSnapshot } from './components/PlayerArenaPanel';
+import { SkinShopModal } from './components/SkinShopModal';
 import { StartScreen } from './components/StartScreen';
 import { TouchAction, TouchControls } from './components/TouchControls';
+import { auth } from './firebase';
 import { computeAIPlan } from './game/ai';
+import {
+  AvatarId,
+  CloudPlayerProfile,
+  ensureAuthPersistence,
+  fetchServerPlayerBundle,
+  isPhoneAuthEnabled,
+  signOutPlayer,
+  syncProfileWithFirestore,
+  syncProgressToServer,
+  updateServerPlayerIdentity,
+} from './game/auth';
 import {
   AI_PROFILES,
   ARR_MS,
@@ -35,11 +56,21 @@ import {
   tryRotatePiece,
 } from './game/engine';
 import {
+  fetchMatchmakingRecord,
+  MatchHistoryRecord,
+  MatchmakingRole,
+  MatchmakingServerEvent,
+  MatchmakingSocketClient,
+  PlayerMatchRecordSummary,
+  ServerBoardSnapshot,
+} from './game/matchmakingClient';
+import {
   abandonOnlineRoom,
   buildPlayerSyncDoc,
   createOnlineRoom,
   decodeNext3Pieces,
   decodeVisibleGridIntoBoard,
+  encodeVisibleGrid,
   finishOnlineRoom,
   joinOnlineRoom,
   loadSavedNickname,
@@ -56,11 +87,34 @@ import {
 import {
   awardMatchXP,
   getAIRivalLevel,
+  hasGuestProgressToMigrate,
   loadPlayerProfile,
   MatchXPResult,
   PlayerProfile,
   savePlayerProfile,
 } from './game/progression';
+import {
+  CheckoutAttemptResult,
+  EquipSkinResult,
+  fetchPaymentGatewayConfig,
+  fetchVerifiedEntitlements,
+  PaymentMethodOption,
+  requestEquipSkin,
+  startMayaCheckout,
+  verifyOrderStatus,
+} from './game/payments';
+import {
+  buildVerifiedSkinInventory,
+  getSkinById,
+  loadSkinPreferences,
+  PlayerSkinInventory,
+  PlayerSkinPreferences,
+  PREMIUM_SKIN_CATALOG,
+  sanitizeServerEquippedSkinId,
+  sanitizeServerOwnedSkinIds,
+  saveSkinPreferences,
+  TileSkinId,
+} from './game/skins';
 import {
   AIPlan,
   AttackProjectile,
@@ -138,6 +192,85 @@ function createOnlineSyncMeta(): OnlineSyncMeta {
     lastRemoteHeartbeatAt: Date.now(),
     remoteConnected: true,
     startedRoundNumber: 0,
+  };
+}
+
+interface QuickMatchSession {
+  matchId: string;
+  role: MatchmakingRole;
+  nickname: string;
+  rivalName: string;
+  rivalLevel: number;
+  roundNumber: number;
+  matchStartAtMs: number;
+  durationMs: number;
+}
+
+interface QuickMatchSyncMeta {
+  kosTaken: number;
+  lastAttackLabel: string;
+  bombBlastsSeq: number;
+  lastBombCount: number;
+  remoteConnected: boolean;
+}
+
+function createQuickMatchSyncMeta(): QuickMatchSyncMeta {
+  return {
+    kosTaken: 0,
+    lastAttackLabel: '',
+    bombBlastsSeq: 0,
+    lastBombCount: 0,
+    remoteConnected: true,
+  };
+}
+
+const EMPTY_MM_RECORD: PlayerMatchRecordSummary = {
+  playerId: '',
+  nickname: 'Player',
+  wins: 0,
+  losses: 0,
+  draws: 0,
+  forfeits: 0,
+  totalKos: 0,
+  matchesPlayed: 0,
+  updatedAt: null,
+};
+
+function buildServerSnapshot(
+  board: PlayerBoardState,
+  meta: QuickMatchSyncMeta
+): ServerBoardSnapshot {
+  let incomingTotal = 0;
+  let incomingReady = 0;
+  for (const b of board.incomingGarbage) {
+    incomingTotal += b.lines;
+    if (b.timerMs <= 0) incomingReady += b.lines;
+  }
+  return {
+    grid: encodeVisibleGrid(board.grid),
+    activeType: board.active.type,
+    activeRot: board.active.rotation,
+    activeX: board.active.x,
+    activeY: board.active.y,
+    hold: board.hold ?? '',
+    holdUsed: board.holdUsed,
+    next3: board.queue.slice(0, 3).join(''),
+    score: board.stats.score,
+    level: board.stats.level,
+    kos: board.stats.kos,
+    kosTaken: meta.kosTaken,
+    linesCleared: board.stats.linesCleared,
+    maxCombo: board.stats.maxCombo,
+    garbageSent: board.stats.garbageSent,
+    quads: board.stats.quads,
+    piecesPlaced: board.stats.piecesPlaced,
+    combo: board.combo,
+    incomingTotal,
+    incomingReady,
+    nextGapCol: board.incomingGarbage.length > 0 ? board.incomingGarbage[0].gapCol : -1,
+    lastAttackLabel: meta.lastAttackLabel.slice(0, 48),
+    bombBlastsSeq: meta.bombBlastsSeq,
+    lastBombCount: meta.lastBombCount,
   };
 }
 
@@ -275,10 +408,44 @@ export default function App() {
   const profileRef = useRef<PlayerProfile>(profile);
   profileRef.current = profile;
 
-  // Online 1v1 Room Battle state
+  // Firebase Auth user, Cloud Player Profile & server-verified skin entitlements
+  const [authUser, setAuthUser] = useState<User | null>(() => auth.currentUser);
+  const [cloudProfile, setCloudProfile] = useState<CloudPlayerProfile | null>(null);
+  const [authModalState, setAuthModalState] = useState<{
+    open: boolean;
+    reason: string | null;
+    pendingAction: null | 'quick_match' | 'online_room' | 'account' | 'shop';
+  }>({ open: false, reason: null, pendingAction: null });
+  const [accountModalOpen, setAccountModalOpen] = useState(false);
+  const pendingMarketplaceAuthResolveRef = useRef<((signedIn: boolean) => void) | null>(null);
+  const cleanupSessionsRef = useRef<() => void>(() => {});
+  const [skinPrefs, setSkinPrefs] = useState<PlayerSkinPreferences>(() => loadSkinPreferences());
+  // Both ownedSkinIds and equippedSkinId are strictly governed by verified server-side records
+  const [verifiedOwnedSkinIds, setVerifiedOwnedSkinIds] = useState<TileSkinId[]>(['classic']);
+  const [verifiedEquippedSkinId, setVerifiedEquippedSkinId] = useState<TileSkinId>('classic');
+  const [gatewayConfigured, setGatewayConfigured] = useState(false);
+  const [shopOpen, setShopOpen] = useState(false);
+  const [paymentBanner, setPaymentBanner] = useState<{
+    tone: 'info' | 'warning' | 'success';
+    text: string;
+  } | null>(null);
+
+  const skinInventory = useMemo<PlayerSkinInventory>(
+    () => buildVerifiedSkinInventory(skinPrefs, verifiedOwnedSkinIds, verifiedEquippedSkinId),
+    [skinPrefs, verifiedOwnedSkinIds, verifiedEquippedSkinId]
+  );
+  const skinInventoryRef = useRef<PlayerSkinInventory>(skinInventory);
+  skinInventoryRef.current = skinInventory;
+
+  // Online 1v1 Room Battle & Matchmaking state
   const [nickname, setNickname] = useState<string>(
     () => profile.nickname || loadSavedNickname() || 'Player'
   );
+  const nicknameRef = useRef<string>(nickname);
+  nicknameRef.current = nickname;
+  const authUserRef = useRef<User | null>(authUser);
+  authUserRef.current = authUser;
+
   const [waitingRoomCode, setWaitingRoomCode] = useState<string | null>(null);
   const [onlineRoom, setOnlineRoom] = useState<OnlineRoomDoc | null>(null);
   const [onlineBusy, setOnlineBusy] = useState(false);
@@ -286,6 +453,260 @@ export default function App() {
   const [opponentNotice, setOpponentNotice] = useState<string | null>(null);
   const [offlineOnlineNotice, setOfflineOnlineNotice] = useState<string | null>(null);
   const isBrowserOnline = useOnlineStatus();
+
+  // Automatic 1v1 Online Matchmaking (WebSocket Quick Match) state
+  const [mmStatus, setMmStatus] = useState<MatchmakingUiStatus>('idle');
+  const [mmEnqueuedAtMs, setMmEnqueuedAtMs] = useState<number | null>(null);
+  const [mmMatchedOpponent, setMmMatchedOpponent] = useState<MatchedOpponentBanner | null>(null);
+  const [mmError, setMmError] = useState<string | null>(null);
+  const [mmInfoNotice, setMmInfoNotice] = useState<string | null>(null);
+  const [mmRematchState, setMmRematchState] = useState<OnlineRematchState>('idle');
+  const [mmRecord, setMmRecord] = useState<PlayerMatchRecordSummary>(EMPTY_MM_RECORD);
+  const mmRecordRef = useRef<PlayerMatchRecordSummary>(mmRecord);
+  mmRecordRef.current = mmRecord;
+  const [mmHistory, setMmHistory] = useState<MatchHistoryRecord[]>([]);
+
+  const applyCloudProfileToLocal = useCallback((resolved: CloudPlayerProfile) => {
+    setCloudProfile(resolved);
+    setNickname(resolved.username);
+    nicknameRef.current = resolved.username;
+    const mergedLocal: PlayerProfile = {
+      level: resolved.level,
+      currentXP: resolved.currentXP,
+      totalXP: resolved.totalXP,
+      totalKOs: resolved.totalKOs,
+      totalWins: resolved.totalWins,
+      totalMatches: resolved.totalMatches,
+      nickname: resolved.username,
+      avatarId: resolved.avatarId,
+      publicPlayerId: resolved.publicPlayerId,
+    };
+    profileRef.current = mergedLocal;
+    setProfile(mergedLocal);
+    savePlayerProfile(mergedLocal);
+  }, []);
+
+  const hydrateAuthenticatedAccount = useCallback(
+    async (user: User) => {
+      const bundle = await fetchServerPlayerBundle(user);
+      if (bundle) {
+        let activeProfile = bundle.profile;
+
+        // Safely migrate local guest XP/stats once on first sign-in without overwriting higher cloud progress
+        if (hasGuestProgressToMigrate(profileRef.current) && !activeProfile.migratedLocalAt) {
+          const migrated = await syncProgressToServer(user, profileRef.current, true);
+          if (migrated) {
+            activeProfile = migrated;
+          }
+        }
+
+        // Mirror & reconcile cross-device profile in Cloud Firestore (/players/{uid})
+        const syncedProfile = await syncProfileWithFirestore(
+          user,
+          activeProfile,
+          bundle.onlineRecord
+        );
+        applyCloudProfileToLocal(syncedProfile);
+
+        const owned = sanitizeServerOwnedSkinIds(bundle.ownedSkinIds);
+        const equipped = sanitizeServerEquippedSkinId(bundle.equippedSkinId, owned);
+        setVerifiedOwnedSkinIds(owned);
+        setVerifiedEquippedSkinId(equipped);
+        setMmRecord(bundle.onlineRecord);
+        setMmHistory(bundle.onlineHistory);
+        return;
+      }
+
+      // Fallback if Express bundle endpoint is temporarily unreachable
+      const res = await fetchVerifiedEntitlements(user);
+      const owned = sanitizeServerOwnedSkinIds(res.ownedSkinIds);
+      const equipped = sanitizeServerEquippedSkinId(res.equippedSkinId, owned);
+      setVerifiedOwnedSkinIds(owned);
+      setVerifiedEquippedSkinId(equipped);
+    },
+    [applyCloudProfileToLocal]
+  );
+
+  // Check server payment gateway availability and enforce persistent browser auth session on boot
+  useEffect(() => {
+    void ensureAuthPersistence();
+    void fetchPaymentGatewayConfig().then((cfg) => {
+      setGatewayConfigured(cfg.gatewayConfigured);
+    });
+  }, []);
+
+  // Subscribe to Firebase Auth and sync player profile, entitlements & online record
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setAuthUser(user);
+      authUserRef.current = user;
+      if (!user) {
+        setCloudProfile(null);
+        setAccountModalOpen(false);
+        setVerifiedOwnedSkinIds(['classic']);
+        setVerifiedEquippedSkinId('classic');
+        setMmRecord(EMPTY_MM_RECORD);
+        setMmHistory([]);
+        setProfile((prev) => {
+          if (!prev.publicPlayerId) return prev;
+          const guestProfile: PlayerProfile = { ...prev, publicPlayerId: null };
+          profileRef.current = guestProfile;
+          savePlayerProfile(guestProfile);
+          return guestProfile;
+        });
+        if (
+          phaseRef.current === 'MATCHMAKING' ||
+          phaseRef.current === 'ONLINE_LOBBY' ||
+          configRef.current.mode === 'quick_match' ||
+          configRef.current.mode === 'online_1v1'
+        ) {
+          cleanupSessionsRef.current();
+          phaseRef.current = 'TITLE';
+          setPhase('TITLE');
+        }
+        return;
+      }
+      void hydrateAuthenticatedAccount(user);
+    });
+    return () => unsubscribe();
+  }, [hydrateAuthenticatedAccount]);
+
+  // Handle return redirect from Maya Checkout (Sandbox) — unlocks ONLY if backend verifies PAID
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const paymentState = params.get('payment');
+    const orderId = params.get('orderId');
+    if (!paymentState) return;
+
+    if (paymentState === 'cancelled') {
+      setShopOpen(true);
+      setPaymentBanner({
+        tone: 'warning',
+        text: 'Payment was cancelled. No skin was unlocked.',
+      });
+      window.history.replaceState({}, '', window.location.pathname);
+      return;
+    }
+
+    if (paymentState === 'failed') {
+      setShopOpen(true);
+      setPaymentBanner({
+        tone: 'warning',
+        text: 'Payment could not be completed. No skin was unlocked.',
+      });
+      window.history.replaceState({}, '', window.location.pathname);
+      return;
+    }
+
+    if (paymentState === 'success' && orderId && authUser) {
+      setShopOpen(true);
+      setPaymentBanner({
+        tone: 'info',
+        text: 'Verifying payment with Maya server...',
+      });
+      void verifyOrderStatus(authUser, orderId).then(async (statusRes) => {
+        window.history.replaceState({}, '', window.location.pathname);
+        if (statusRes && statusRes.status === 'PAID') {
+          const verifiedIds = sanitizeServerOwnedSkinIds(statusRes.ownedSkinIds);
+          setVerifiedOwnedSkinIds(verifiedIds);
+          let nextEquipped = sanitizeServerEquippedSkinId(statusRes.equippedSkinId, verifiedIds);
+          if (verifiedIds.includes(statusRes.skinId)) {
+            const equipRes = await requestEquipSkin(authUser, statusRes.skinId);
+            if (equipRes.ok) {
+              nextEquipped = sanitizeServerEquippedSkinId(equipRes.equippedSkinId, verifiedIds);
+            }
+          }
+          setVerifiedEquippedSkinId(nextEquipped);
+          soundEngine.playLevelUp(1);
+          const skinDef = getSkinById(statusRes.skinId);
+          setPaymentBanner({
+            tone: 'success',
+            text: `Payment verified! ${skinDef.name} has been unlocked.`,
+          });
+        } else {
+          setPaymentBanner({
+            tone: 'warning',
+            text: 'Payment has not been verified yet. Skins unlock only after server confirmation.',
+          });
+        }
+      });
+    }
+  }, [authUser]);
+
+  const openAuthGate = useCallback(
+    (
+      pendingAction: null | 'quick_match' | 'online_room' | 'account' | 'shop',
+      reason: string | null
+    ) => {
+      setAuthModalState({ open: true, reason, pendingAction });
+    },
+    []
+  );
+
+  const handleMarketplaceSignIn = useCallback((): Promise<boolean> => {
+    if (authUserRef.current) {
+      return Promise.resolve(true);
+    }
+    return new Promise((resolve) => {
+      pendingMarketplaceAuthResolveRef.current = resolve;
+      openAuthGate(
+        'shop',
+        isPhoneAuthEnabled()
+          ? 'Sign in with Google or Phone to tie premium cosmetic purchases securely to your Block Clash account.'
+          : 'Sign in with Google to tie premium cosmetic purchases securely to your Block Clash account.'
+      );
+    });
+  }, [openAuthGate]);
+
+  const handleRequestPurchase = useCallback(
+    async (
+      skinId: TileSkinId,
+      paymentMethod: PaymentMethodOption
+    ): Promise<CheckoutAttemptResult> => {
+      const result = await startMayaCheckout(authUser, skinId, paymentMethod);
+      if (!result.ok && result.code === 'ALREADY_OWNED' && result.ownedSkinIds) {
+        setVerifiedOwnedSkinIds(sanitizeServerOwnedSkinIds(result.ownedSkinIds));
+      }
+      return result;
+    },
+    [authUser]
+  );
+
+  // Every Equip request is validated against the backend POST /api/skins/equip
+  const handleEquipSkin = useCallback(
+    async (skinId: TileSkinId): Promise<EquipSkinResult> => {
+      const result = await requestEquipSkin(authUser, skinId);
+      const owned = sanitizeServerOwnedSkinIds(result.ownedSkinIds);
+      setVerifiedOwnedSkinIds(owned);
+      setVerifiedEquippedSkinId(sanitizeServerEquippedSkinId(result.equippedSkinId, owned));
+      return result;
+    },
+    [authUser]
+  );
+
+  const handleToggleReducedEffects = useCallback(() => {
+    setSkinPrefs((prev) => {
+      const next: PlayerSkinPreferences = { reducedEffects: !prev.reducedEffects };
+      saveSkinPreferences(next);
+      return next;
+    });
+  }, []);
+
+  const refreshQuickMatchRecord = useCallback(async () => {
+    if (!authUserRef.current) {
+      setMmRecord(EMPTY_MM_RECORD);
+      setMmHistory([]);
+      return;
+    }
+    const res = await fetchMatchmakingRecord(authUserRef.current);
+    setMmRecord(res.record);
+    setMmHistory(res.history);
+  }, []);
+
+  useEffect(() => {
+    void refreshQuickMatchRecord();
+  }, [authUser, refreshQuickMatchRecord]);
 
   useEffect(() => {
     if (isBrowserOnline) {
@@ -336,7 +757,7 @@ export default function App() {
   const aiActionAccRef = useRef(0);
   const aiThinkWaitRef = useRef(0);
 
-  // Online multiplayer refs
+  // Online multiplayer refs (Private Room Firestore + Automatic Quick Match WebSocket)
   const onlineSessionRef = useRef<OnlineSession | null>(null);
   const onlineRoomRef = useRef<OnlineRoomDoc | null>(null);
   const onlineSyncMetaRef = useRef<OnlineSyncMeta>(createOnlineSyncMeta());
@@ -344,6 +765,11 @@ export default function App() {
   const onlineDirtyRef = useRef(false);
   const lastOnlinePushAtRef = useRef(0);
   const lastHeartbeatAtRef = useRef(0);
+
+  const mmClientRef = useRef<MatchmakingSocketClient | null>(null);
+  const mmSessionRef = useRef<QuickMatchSession | null>(null);
+  const mmSyncMetaRef = useRef<QuickMatchSyncMeta>(createQuickMatchSyncMeta());
+  const mmEventHandlerRef = useRef<(ev: MatchmakingServerEvent) => void>(() => {});
 
   // Responsive board sizing across desktop, portrait phone, and landscape mobile/tablet
   useEffect(() => {
@@ -373,17 +799,21 @@ export default function App() {
     const cfg = configRef.current;
     const session = onlineSessionRef.current;
     const p1Sub =
-      cfg.mode === 'online_1v1' && session
-        ? `Room ${session.roomCode}`
-        : 'Player 1';
+      cfg.mode === 'quick_match'
+        ? 'Quick Match 1v1'
+        : cfg.mode === 'online_1v1' && session
+          ? `Room ${session.roomCode}`
+          : 'Player 1';
     const p2Sub =
-      cfg.mode === 'online_1v1'
-        ? 'Online Rival'
-        : cfg.mode === 'vs_ai'
-          ? `${AI_PROFILES[cfg.difficulty].label} AI`
-          : 'Player 2';
+      cfg.mode === 'quick_match'
+        ? 'Online Opponent'
+        : cfg.mode === 'online_1v1'
+          ? 'Online Rival'
+          : cfg.mode === 'vs_ai'
+            ? `${AI_PROFILES[cfg.difficulty].label} AI`
+            : 'Player 2';
     const p2Level =
-      cfg.mode === 'online_1v1'
+      cfg.mode === 'online_1v1' || cfg.mode === 'quick_match'
         ? rivalProfileLevelRef.current
         : cfg.mode === 'vs_ai'
           ? getAIRivalLevel(cfg.difficulty)
@@ -393,9 +823,27 @@ export default function App() {
   }, []);
 
   const flushLocalOnlineSync = useCallback((force = false) => {
-    const session = onlineSessionRef.current;
-    if (!session || configRef.current.mode !== 'online_1v1') return;
+    const mode = configRef.current.mode;
     const now = performance.now();
+
+    if (mode === 'quick_match') {
+      const mmSession = mmSessionRef.current;
+      const client = mmClientRef.current;
+      if (!mmSession || !client || !client.isConnected()) return;
+      if (!force && now - lastOnlinePushAtRef.current < 75) return;
+
+      lastOnlinePushAtRef.current = now;
+      onlineDirtyRef.current = false;
+      client.sendStateUpdate({
+        matchId: mmSession.matchId,
+        roundNumber: mmSession.roundNumber,
+        snapshot: buildServerSnapshot(p1Ref.current, mmSyncMetaRef.current),
+      });
+      return;
+    }
+
+    const session = onlineSessionRef.current;
+    if (!session || mode !== 'online_1v1') return;
     if (!force && now - lastOnlinePushAtRef.current < 175) return;
 
     lastOnlinePushAtRef.current = now;
@@ -440,70 +888,109 @@ export default function App() {
     }, 2200);
   }, []);
 
-  const finishMatch = useCallback((reason: string, forceWinner?: PlayerId) => {
-    if (phaseRef.current === 'SUMMARY') return;
-    phaseRef.current = 'SUMMARY';
-    setPhase('SUMMARY');
+  const finishMatch = useCallback(
+    (
+      reason: string,
+      forceWinner?: PlayerId,
+      serverOverride?: {
+        winnerOverride: PlayerId | 'draw';
+        p1Stats: PlayerStats;
+        p2Stats: PlayerStats;
+        durationMs?: number;
+      }
+    ) => {
+      if (phaseRef.current === 'SUMMARY') return;
+      phaseRef.current = 'SUMMARY';
+      setPhase('SUMMARY');
 
-    const b1 = p1Ref.current;
-    const b2 = p2Ref.current;
+      const b1 = p1Ref.current;
+      const b2 = p2Ref.current;
 
-    let winner: PlayerId | 'draw' = 'draw';
-    if (forceWinner) {
-      winner = forceWinner;
-    } else if (b1.stats.kos !== b2.stats.kos) {
-      winner = b1.stats.kos > b2.stats.kos ? 'p1' : 'p2';
-    } else if (b1.stats.linesCleared !== b2.stats.linesCleared) {
-      winner = b1.stats.linesCleared > b2.stats.linesCleared ? 'p1' : 'p2';
-    }
+      const finalP1Stats: PlayerStats = serverOverride
+        ? { ...serverOverride.p1Stats }
+        : { ...b1.stats };
+      const finalP2Stats: PlayerStats = serverOverride
+        ? { ...serverOverride.p2Stats }
+        : { ...b2.stats };
 
-    const winnerText =
-      winner === 'draw'
-        ? 'Draw Match'
-        : winner === 'p1'
-          ? `${b1.label} Wins!`
-          : `${b2.label} Wins!`;
+      let winner: PlayerId | 'draw' = 'draw';
+      if (serverOverride) {
+        winner = serverOverride.winnerOverride;
+      } else if (forceWinner) {
+        winner = forceWinner;
+      } else if (finalP1Stats.kos !== finalP2Stats.kos) {
+        winner = finalP1Stats.kos > finalP2Stats.kos ? 'p1' : 'p2';
+      } else if (finalP1Stats.linesCleared !== finalP2Stats.linesCleared) {
+        winner = finalP1Stats.linesCleared > finalP2Stats.linesCleared ? 'p1' : 'p2';
+      }
 
-    soundEngine.playMatchEnd(winner !== 'p2');
+      const winnerText =
+        winner === 'draw'
+          ? 'Draw Match'
+          : winner === 'p1'
+            ? `${b1.label} Wins!`
+            : `${b2.label} Wins!`;
 
-    // Award persistent Level 1-300 XP & update player profile
-    const cfg = configRef.current;
-    const { nextProfile, xpResult } = awardMatchXP(profileRef.current, {
-      won: winner === 'p1',
-      mode: cfg.mode,
-      difficulty: cfg.difficulty,
-      stats: b1.stats,
-    });
-    profileRef.current = nextProfile;
-    setProfile(nextProfile);
+      soundEngine.playMatchEnd(winner !== 'p2');
 
-    setSummary({
-      winnerText,
-      reasonText: reason,
-      durationText: formatElapsed(elapsedMsRef.current),
-      p1Stats: { ...b1.stats },
-      p2Stats: { ...b2.stats },
-      xpResult,
-    });
-  }, []);
+      // Award persistent Level 1-300 XP & update player profile
+      const cfg = configRef.current;
+      const { nextProfile, xpResult } = awardMatchXP(profileRef.current, {
+        won: winner === 'p1',
+        mode: cfg.mode,
+        difficulty: cfg.difficulty,
+        stats: finalP1Stats,
+      });
+      profileRef.current = nextProfile;
+      setProfile(nextProfile);
+
+      // Persist progression cross-device to Express backend + Cloud Firestore if signed in
+      const signedInUser = authUserRef.current;
+      if (signedInUser) {
+        void syncProgressToServer(signedInUser, nextProfile, false).then((updatedCloud) => {
+          if (!updatedCloud) return;
+          setCloudProfile(updatedCloud);
+          void syncProfileWithFirestore(signedInUser, updatedCloud, mmRecordRef.current);
+        });
+      }
+
+      setSummary({
+        winnerText,
+        reasonText: reason,
+        durationText: formatElapsed(serverOverride?.durationMs ?? elapsedMsRef.current),
+        p1Stats: finalP1Stats,
+        p2Stats: finalP2Stats,
+        xpResult,
+      });
+    },
+    []
+  );
 
   const spawnLineClearParticles = useCallback((board: PlayerBoardState, rows: number[]) => {
     const t = themeRef.current;
+    const inv = skinInventoryRef.current;
+    const activeSkin = inv.equippedSkinId !== 'classic' ? getSkinById(inv.equippedSkinId) : null;
+    const perCellParticles = inv.reducedEffects ? 1 : 2;
     board.clearFlashes.push({ rows, alpha: 1, kind: 'line' });
     for (const rowIdx of rows) {
       const visRow = rowIdx - BUFFER_ROWS;
       if (visRow < 0) continue;
       for (let c = 0; c < COLS; c++) {
-        for (let k = 0; k < 2; k++) {
+        for (let k = 0; k < perCellParticles; k++) {
           const pieceKeys = ['I', 'O', 'T', 'S', 'Z', 'J', 'L'] as const;
           const pick = pieceKeys[(c + rowIdx + k) % pieceKeys.length];
+          const particleColor = activeSkin
+            ? k === 0
+              ? activeSkin.pieces[pick].light
+              : activeSkin.pieces[pick].glow
+            : t.pieces[pick].light;
           board.particles.push({
             x: c + 0.5,
             y: visRow + 0.5,
             vx: (Math.random() - 0.5) * 9,
             vy: -Math.random() * 6 - 1.5,
             size: 3 + Math.random() * 4,
-            color: t.pieces[pick].light,
+            color: particleColor,
             alpha: 1,
             life: 0,
             maxLife: 0.45 + Math.random() * 0.25,
@@ -583,7 +1070,9 @@ export default function App() {
   const processLockOutcome = useCallback(
     (attacker: PlayerBoardState, defender: PlayerBoardState, result: LockResult) => {
       const t = themeRef.current;
-      const isOnline = configRef.current.mode === 'online_1v1';
+      const isRoomOnline = configRef.current.mode === 'online_1v1';
+      const isQuickMatch = configRef.current.mode === 'quick_match';
+      const isOnline = isRoomOnline || isQuickMatch;
       const session = onlineSessionRef.current;
 
       // Bomb Block Detonation & Chain Blast feedback
@@ -592,21 +1081,24 @@ export default function App() {
         soundEngine.playBombExplosion(result.bombsDetonated);
         soundEngine.triggerHaptic(result.bombsDetonated >= 2 ? [16, 26, 22] : 14);
 
-        if (isOnline && attacker.id === 'p1') {
+        if (isRoomOnline && attacker.id === 'p1') {
           onlineSyncMetaRef.current.bombBlastsSeq += 1;
           onlineSyncMetaRef.current.lastBombCount = result.bombsDetonated;
+        } else if (isQuickMatch && attacker.id === 'p1') {
+          mmSyncMetaRef.current.bombBlastsSeq += 1;
+          mmSyncMetaRef.current.lastBombCount = result.bombsDetonated;
         }
 
         const isChain = result.bombsDetonated >= 2;
         pushCallout(
           attacker.id,
-          isChain ? 'CHAIN BLAST!' : 'BOMB CLEAR!',
+          isChain ? 'CHAIN BLAST!' : 'CORE BLAST!',
           'bomb',
-          isChain ? `${result.bombsDetonated}x BOMBS CLEARED` : 'GARBAGE ROW CLEARED'
+          isChain ? `${result.bombsDetonated}x CORES DETONATED` : 'BREACH ROW CLEARED'
         );
         pushFeed(
           attacker.id,
-          `${attacker.label}: ${isChain ? `Chain Blast (${result.bombsDetonated}x)` : 'Bomb Clear!'}`
+          `${attacker.label}: ${isChain ? `Chain Blast (${result.bombsDetonated}x Cores)` : 'Core Blast!'}`
         );
       }
 
@@ -650,7 +1142,7 @@ export default function App() {
         }
 
         if (result.attackSent > 0) {
-          // In local modes, enqueue directly on defender board; in online mode, Firestore sync delivers it
+          // In local modes, enqueue directly on defender board; in online modes, server/Firestore delivers it
           if (!isOnline) {
             enqueueGarbage(defender, result.attackSent);
           }
@@ -681,8 +1173,10 @@ export default function App() {
                 ? `${result.combo}x Combo (+${result.attackSent})`
                 : `Attack (+${result.attackSent})`;
           const feedMsg = `${attacker.label}: ${attackTag}`;
-          if (isOnline && attacker.id === 'p1') {
+          if (isRoomOnline && attacker.id === 'p1') {
             onlineSyncMetaRef.current.lastAttackLabel = feedMsg.slice(0, 48);
+          } else if (isQuickMatch && attacker.id === 'p1') {
+            mmSyncMetaRef.current.lastAttackLabel = feedMsg.slice(0, 48);
           }
           pushFeed(attacker.id, feedMsg);
         } else if (result.garbageCancelled > 0) {
@@ -697,9 +1191,23 @@ export default function App() {
       }
 
       if (result.isKO) {
+        if (isQuickMatch) {
+          // In Quick Match, report local top-out to server; server authoritatively updates KOs & Sudden Death finish
+          if (attacker.id === 'p1') {
+            mmSyncMetaRef.current.kosTaken += 1;
+          }
+          spawnKOParticles(attacker);
+          soundEngine.playKO();
+          soundEngine.triggerHaptic([28, 30, 42]);
+          pushCallout(attacker.id, 'KO!', 'ko', 'Board Reset');
+          flushLocalOnlineSync(true);
+          syncHuds();
+          return;
+        }
+
         defender.stats.kos++;
         defender.stats.score += 1000;
-        if (isOnline && attacker.id === 'p1') {
+        if (isRoomOnline && attacker.id === 'p1') {
           onlineSyncMetaRef.current.kosTaken += 1;
         }
         spawnKOParticles(attacker);
@@ -711,7 +1219,7 @@ export default function App() {
 
         // Sudden Death resolves immediately on the next KO
         if (suddenDeathRef.current) {
-          if (isOnline && session) {
+          if (isRoomOnline && session) {
             flushLocalOnlineSync(true);
             const rivalRole = session.role === 'host' ? 'guest' : 'host';
             void finishOnlineRoom(session.roomCode, rivalRole, 'Sudden Death KO Victory');
@@ -750,7 +1258,12 @@ export default function App() {
   const performPlayerAction = useCallback(
     (playerId: PlayerId, action: TouchAction) => {
       if (phaseRef.current !== 'PLAYING') return;
-      if (configRef.current.mode === 'online_1v1' && playerId === 'p2') return;
+      if (
+        (configRef.current.mode === 'online_1v1' || configRef.current.mode === 'quick_match') &&
+        playerId === 'p2'
+      ) {
+        return;
+      }
       soundEngine.unlock();
 
       const board = playerId === 'p1' ? p1Ref.current : p2Ref.current;
@@ -791,7 +1304,11 @@ export default function App() {
         case 'hold':
           if (tryHoldPiece(board)) {
             soundEngine.playHold();
-            if (playerId === 'p1' && configRef.current.mode === 'online_1v1') {
+            if (
+              playerId === 'p1' &&
+              (configRef.current.mode === 'online_1v1' ||
+                configRef.current.mode === 'quick_match')
+            ) {
               flushLocalOnlineSync(true);
             }
             syncHuds();
@@ -890,12 +1407,41 @@ export default function App() {
     setOpponentNotice(null);
   }, []);
 
+  const cleanupQuickMatchSession = useCallback((forfeitIfPlaying = true) => {
+    const inActiveMatch =
+      Boolean(mmSessionRef.current) &&
+      (phaseRef.current === 'PLAYING' || phaseRef.current === 'COUNTDOWN');
+    if (mmClientRef.current) {
+      mmClientRef.current.disconnect(forfeitIfPlaying && inActiveMatch);
+      mmClientRef.current = null;
+    }
+    mmSessionRef.current = null;
+    mmSyncMetaRef.current = createQuickMatchSyncMeta();
+    onlineDirtyRef.current = false;
+    setMmStatus('idle');
+    setMmEnqueuedAtMs(null);
+    setMmMatchedOpponent(null);
+    setMmRematchState('idle');
+    setOpponentNotice(null);
+  }, []);
+
+  cleanupSessionsRef.current = () => {
+    cleanupOnlineSession(true);
+    cleanupQuickMatchSession(true);
+  };
+
   // Ensure clean disconnect signal on tab close / mobile navigation away
   useEffect(() => {
     const onLeavePage = () => {
       const session = onlineSessionRef.current;
       if (session) {
         void markPlayerDisconnected(session.roomCode, session.role);
+      }
+      if (mmClientRef.current) {
+        const active =
+          Boolean(mmSessionRef.current) &&
+          (phaseRef.current === 'PLAYING' || phaseRef.current === 'COUNTDOWN');
+        mmClientRef.current.disconnect(active);
       }
     };
     window.addEventListener('beforeunload', onLeavePage);
@@ -904,8 +1450,9 @@ export default function App() {
       window.removeEventListener('beforeunload', onLeavePage);
       window.removeEventListener('pagehide', onLeavePage);
       cleanupOnlineSession(true);
+      cleanupQuickMatchSession(true);
     };
-  }, [cleanupOnlineSession]);
+  }, [cleanupOnlineSession, cleanupQuickMatchSession]);
 
   const startOnlineRound = useCallback(
     (room: OnlineRoomDoc) => {
@@ -1231,6 +1778,13 @@ export default function App() {
 
   const handleCreateOnlineRoom = useCallback(async () => {
     soundEngine.unlock();
+    if (!authUserRef.current) {
+      openAuthGate(
+        'online_room',
+        'Sign in to create a Private Online 1v1 Room with your verified account.'
+      );
+      return;
+    }
     setOnlineBusy(true);
     setOnlineError(null);
     try {
@@ -1260,11 +1814,18 @@ export default function App() {
     } finally {
       setOnlineBusy(false);
     }
-  }, [attachOnlineListeners, handleChangeNickname, nickname]);
+  }, [attachOnlineListeners, handleChangeNickname, nickname, openAuthGate]);
 
   const handleJoinOnlineRoom = useCallback(
     async (code: string) => {
       soundEngine.unlock();
+      if (!authUserRef.current) {
+        openAuthGate(
+          'online_room',
+          'Sign in to join a Private Online 1v1 Room with your verified account.'
+        );
+        return;
+      }
       setOnlineBusy(true);
       setOnlineError(null);
       try {
@@ -1295,7 +1856,7 @@ export default function App() {
         setOnlineBusy(false);
       }
     },
-    [attachOnlineListeners, handleChangeNickname, nickname]
+    [attachOnlineListeners, handleChangeNickname, nickname, openAuthGate]
   );
 
   const handleOnlineRematch = useCallback(async () => {
@@ -1309,6 +1870,738 @@ export default function App() {
     }
   }, []);
 
+  // =========================================================================
+  // AUTOMATIC 1V1 ONLINE MATCHMAKING (WebSocket Quick Match)
+  // =========================================================================
+  const startQuickMatchCountdown = useCallback(
+    (ev: Extract<MatchmakingServerEvent, { type: 'match:found' }>) => {
+      soundEngine.unlock();
+      if (countdownTimerRef.current !== null) {
+        window.clearTimeout(countdownTimerRef.current);
+        countdownTimerRef.current = null;
+      }
+
+      const myName = sanitizeNickname(nicknameRef.current, 'Player');
+      const oppName = ev.opponent.nickname || 'Opponent';
+      const oppLevel = ev.opponent.level >= 1 ? ev.opponent.level : 1;
+
+      setConfig((prev) => ({ ...prev, mode: 'quick_match', matchType: ev.matchType }));
+      configRef.current = {
+        ...configRef.current,
+        mode: 'quick_match',
+        matchType: ev.matchType,
+      };
+
+      rivalProfileLevelRef.current = oppLevel;
+      mmSessionRef.current = {
+        matchId: ev.matchId,
+        role: ev.role,
+        nickname: myName,
+        rivalName: oppName,
+        rivalLevel: oppLevel,
+        roundNumber: ev.roundNumber,
+        matchStartAtMs: ev.matchStartAtMs,
+        durationMs: ev.durationMs,
+      };
+      mmSyncMetaRef.current = createQuickMatchSyncMeta();
+
+      p1Ref.current = createPlayerBoard('p1', myName);
+      p2Ref.current = createPlayerBoard('p2', oppName);
+      projectilesRef.current = [];
+      p1KeysRef.current = createKeyHoldState();
+      p2KeysRef.current = createKeyHoldState();
+      elapsedMsRef.current = 0;
+      suddenDeathRef.current = false;
+
+      setMmStatus('matched');
+      setMmEnqueuedAtMs(null);
+      setMmError(null);
+      setMmInfoNotice(null);
+      setMmRematchState('idle');
+      setMmMatchedOpponent({
+        nickname: oppName,
+        level: oppLevel,
+        matchType: ev.matchType,
+        roundNumber: ev.roundNumber,
+      });
+
+      setOpponentNotice(null);
+      setSuddenDeath(false);
+      setClockDisplay(ev.matchType === 'ko_2min' ? '2:00' : '0:00');
+      setBattleFeed([]);
+      setLatestAttackAlert(null);
+      setCallouts([]);
+      setSummary(null);
+      syncHuds();
+
+      flushLocalOnlineSync(true);
+
+      setPhase('COUNTDOWN');
+      phaseRef.current = 'COUNTDOWN';
+
+      const offset = mmClientRef.current?.serverClockOffsetMs ?? 0;
+      const remainingMs = Math.max(
+        900,
+        Math.min(3200, ev.matchStartAtMs - (Date.now() + offset))
+      );
+      const stepMs = Math.round(remainingMs / 3);
+
+      setCountdownStep('3');
+      soundEngine.playCountdown(false);
+
+      countdownTimerRef.current = window.setTimeout(() => {
+        setCountdownStep('2');
+        soundEngine.playCountdown(false);
+        countdownTimerRef.current = window.setTimeout(() => {
+          setCountdownStep('1');
+          soundEngine.playCountdown(false);
+          countdownTimerRef.current = window.setTimeout(() => {
+            if (phaseRef.current === 'COUNTDOWN') {
+              setCountdownStep('CLASH!');
+              soundEngine.playCountdown(true);
+              phaseRef.current = 'PLAYING';
+              setPhase('PLAYING');
+              countdownTimerRef.current = window.setTimeout(() => {
+                setCountdownStep('');
+                setMmMatchedOpponent(null);
+              }, 480);
+            }
+          }, stepMs);
+        }, stepMs);
+      }, stepMs);
+    },
+    [flushLocalOnlineSync, syncHuds]
+  );
+
+  const handleMatchmakingEvent = useCallback(
+    (ev: MatchmakingServerEvent) => {
+      switch (ev.type) {
+        case 'queue:joined':
+          setMmStatus('searching');
+          setMmEnqueuedAtMs(Date.now());
+          setMmError(null);
+          setMmInfoNotice(null);
+          break;
+
+        case 'queue:cancelled':
+          setMmStatus('idle');
+          setMmEnqueuedAtMs(null);
+          if (ev.removed) {
+            setMmInfoNotice('Matchmaking cancelled.');
+          }
+          break;
+
+        case 'queue:error':
+          setMmStatus('error');
+          setMmEnqueuedAtMs(null);
+          setMmError(ev.message);
+          break;
+
+        case 'match:found':
+          startQuickMatchCountdown(ev);
+          break;
+
+        case 'match:start': {
+          const session = mmSessionRef.current;
+          if (!session || session.matchId !== ev.matchId || session.roundNumber !== ev.roundNumber) {
+            return;
+          }
+          session.matchStartAtMs = ev.matchStartAtMs;
+          session.durationMs = ev.durationMs;
+          if (countdownTimerRef.current !== null) {
+            window.clearTimeout(countdownTimerRef.current);
+            countdownTimerRef.current = null;
+          }
+          if (phaseRef.current === 'COUNTDOWN') {
+            setCountdownStep('CLASH!');
+            soundEngine.playCountdown(true);
+            phaseRef.current = 'PLAYING';
+            setPhase('PLAYING');
+            countdownTimerRef.current = window.setTimeout(() => {
+              setCountdownStep('');
+              setMmMatchedOpponent(null);
+            }, 480);
+          }
+          flushLocalOnlineSync(true);
+          break;
+        }
+
+        case 'match:resumed': {
+          const myName = sanitizeNickname(nicknameRef.current, 'Player');
+          rivalProfileLevelRef.current = ev.opponent.level >= 1 ? ev.opponent.level : 1;
+          mmSessionRef.current = {
+            matchId: ev.matchId,
+            role: ev.role,
+            nickname: myName,
+            rivalName: ev.opponent.nickname || 'Opponent',
+            rivalLevel: rivalProfileLevelRef.current,
+            roundNumber: ev.roundNumber,
+            matchStartAtMs: ev.matchStartAtMs,
+            durationMs: ev.durationMs,
+          };
+          setConfig((prev) => ({ ...prev, mode: 'quick_match', matchType: ev.matchType }));
+          configRef.current = {
+            ...configRef.current,
+            mode: 'quick_match',
+            matchType: ev.matchType,
+          };
+          p1Ref.current.stats.kos = ev.myKos;
+          p1Ref.current.stats.score = Math.max(p1Ref.current.stats.score, ev.myScore);
+          const p2 = p2Ref.current;
+          p2.label = ev.opponent.nickname || 'Opponent';
+          decodeVisibleGridIntoBoard(ev.opponent.snapshot.grid, p2);
+          p2.active = {
+            type: ev.opponent.snapshot.activeType,
+            rotation: ev.opponent.snapshot.activeRot,
+            x: ev.opponent.snapshot.activeX,
+            y: ev.opponent.snapshot.activeY,
+          };
+          p2.hold = ev.opponent.snapshot.hold ? ev.opponent.snapshot.hold : null;
+          p2.holdUsed = ev.opponent.snapshot.holdUsed;
+          p2.queue = decodeNext3Pieces(ev.opponent.snapshot.next3);
+          p2.combo = ev.opponent.snapshot.combo;
+          p2.stats = {
+            score: ev.opponent.snapshot.score,
+            level: ev.opponent.snapshot.level,
+            kos: ev.opponent.snapshot.kos,
+            linesCleared: ev.opponent.snapshot.linesCleared,
+            maxCombo: ev.opponent.snapshot.maxCombo,
+            garbageSent: ev.opponent.snapshot.garbageSent,
+            quads: ev.opponent.snapshot.quads,
+            piecesPlaced: ev.opponent.snapshot.piecesPlaced,
+            bombChains: 0,
+          };
+          suddenDeathRef.current = ev.suddenDeath;
+          setSuddenDeath(ev.suddenDeath);
+          setOpponentNotice(null);
+          setCountdownStep('');
+          setMmMatchedOpponent(null);
+          phaseRef.current = 'PLAYING';
+          setPhase('PLAYING');
+          syncHuds();
+          flushLocalOnlineSync(true);
+          break;
+        }
+
+        case 'opponent:state': {
+          const session = mmSessionRef.current;
+          if (!session || session.matchId !== ev.matchId || ev.roundNumber < session.roundNumber) {
+            return;
+          }
+          const p2 = p2Ref.current;
+          p2.label = ev.nickname || session.rivalName || 'Opponent';
+          if (typeof ev.playerLevel === 'number' && ev.playerLevel >= 1) {
+            rivalProfileLevelRef.current = ev.playerLevel;
+          }
+          const snap = ev.snapshot;
+          decodeVisibleGridIntoBoard(snap.grid, p2);
+          p2.active = {
+            type: snap.activeType,
+            rotation: snap.activeRot,
+            x: snap.activeX,
+            y: snap.activeY,
+          };
+          p2.hold = snap.hold ? snap.hold : null;
+          p2.holdUsed = snap.holdUsed;
+          p2.queue = decodeNext3Pieces(snap.next3);
+          p2.combo = snap.combo;
+          p2.stats = {
+            score: snap.score,
+            level: snap.level,
+            kos: snap.kos,
+            linesCleared: snap.linesCleared,
+            maxCombo: snap.maxCombo,
+            garbageSent: snap.garbageSent,
+            quads: snap.quads,
+            piecesPlaced: snap.piecesPlaced,
+            bombChains: 0,
+          };
+          p2.incomingGarbage =
+            snap.incomingTotal > 0
+              ? [
+                  {
+                    id: 1,
+                    lines: snap.incomingTotal,
+                    gapCol: snap.nextGapCol >= 0 ? snap.nextGapCol : 4,
+                    timerMs: snap.incomingReady > 0 ? 0 : 400,
+                  },
+                ]
+              : [];
+
+          if (phaseRef.current === 'PLAYING' && ev.garbageAttack > 0) {
+            enqueueGarbage(p1Ref.current, ev.garbageAttack);
+            soundEngine.playGarbageWarning();
+            projectilesRef.current.push({
+              id: projectileIdRef.current++,
+              from: 'p2',
+              to: 'p1',
+              lines: ev.garbageAttack,
+              progress: 0,
+              durationMs: 460,
+              arcHeight: 75 + Math.min(80, ev.garbageAttack * 14),
+              color: themeRef.current.accentP2,
+              startYNorm: 0.55,
+            });
+            pushFeed(
+              'p2',
+              ev.attackLabel || `${p2.label}: Attack (+${ev.garbageAttack})`
+            );
+          }
+
+          if (phaseRef.current === 'PLAYING' && ev.bombBurstCount > 0) {
+            soundEngine.playBombExplosion(ev.bombBurstCount);
+            pushCallout(
+              'p2',
+              ev.bombBurstCount >= 2 ? 'CHAIN BLAST!' : 'BOMB CLEAR!',
+              'bomb',
+              ev.bombBurstCount >= 2 ? `${ev.bombBurstCount}x BOMBS CLEARED` : undefined
+            );
+          }
+
+          syncHuds();
+          break;
+        }
+
+        case 'ko:event': {
+          const session = mmSessionRef.current;
+          if (!session || session.matchId !== ev.matchId || ev.roundNumber !== session.roundNumber) {
+            return;
+          }
+          const myKos = session.role === 'p1' ? ev.p1Kos : ev.p2Kos;
+          const oppKos = session.role === 'p1' ? ev.p2Kos : ev.p1Kos;
+          const myScore = session.role === 'p1' ? ev.p1Score : ev.p2Score;
+          const oppScore = session.role === 'p1' ? ev.p2Score : ev.p1Score;
+
+          p1Ref.current.stats.kos = myKos;
+          p1Ref.current.stats.score = Math.max(p1Ref.current.stats.score, myScore);
+          p2Ref.current.stats.kos = oppKos;
+          p2Ref.current.stats.score = Math.max(p2Ref.current.stats.score, oppScore);
+
+          if (ev.koVictimSlot !== session.role) {
+            // Opponent got KO'd -> we scored a KO!
+            spawnKOParticles(p2Ref.current);
+            soundEngine.playKO();
+            soundEngine.triggerHaptic([28, 30, 42]);
+            pushCallout('p2', 'KO!', 'ko', 'Board Reset');
+            pushCallout('p1', '+1 KO!', 'quad', '+1,000 PTS');
+            pushFeed('p1', `${p1Ref.current.label} scored a KO!`);
+          } else {
+            // Local player got KO'd -> opponent scored a KO
+            pushCallout('p2', '+1 KO!', 'quad', '+1,000 PTS');
+            pushFeed('p2', `${p2Ref.current.label} scored a KO!`);
+          }
+          syncHuds();
+          break;
+        }
+
+        case 'match:sudden_death': {
+          const session = mmSessionRef.current;
+          if (!session || session.matchId !== ev.matchId || ev.roundNumber !== session.roundNumber) {
+            return;
+          }
+          if (!suddenDeathRef.current) {
+            suddenDeathRef.current = true;
+            setSuddenDeath(true);
+            setClockDisplay('SD');
+            soundEngine.playGarbageWarning();
+            pushCallout('p1', 'SUDDEN DEATH!', 'ko', 'Next KO Wins');
+            pushCallout('p2', 'SUDDEN DEATH!', 'ko', 'Next KO Wins');
+            pushFeed('p1', 'Sudden Death — Next KO wins!');
+          }
+          break;
+        }
+
+        case 'opponent:reconnecting':
+          setOpponentNotice(
+            `${ev.opponentName} disconnected — waiting ${Math.max(1, Math.round(ev.graceMs / 1000))}s to reconnect...`
+          );
+          break;
+
+        case 'opponent:reconnected':
+          setOpponentNotice(null);
+          pushFeed('p2', `${ev.opponentName} reconnected!`);
+          break;
+
+        case 'match:abandoned':
+          if (countdownTimerRef.current !== null) {
+            window.clearTimeout(countdownTimerRef.current);
+            countdownTimerRef.current = null;
+          }
+          mmSessionRef.current = null;
+          mmSyncMetaRef.current = createQuickMatchSyncMeta();
+          setCountdownStep('');
+          setMmMatchedOpponent(null);
+          setOpponentNotice(null);
+          setMmStatus('idle');
+          setMmEnqueuedAtMs(null);
+          setMmInfoNotice(`${ev.reason} No loss was recorded.`);
+          phaseRef.current = 'MATCHMAKING';
+          setPhase('MATCHMAKING');
+          void refreshQuickMatchRecord();
+          break;
+
+        case 'match:finished': {
+          const session = mmSessionRef.current;
+          if (!session || session.matchId !== ev.matchId) return;
+          if (countdownTimerRef.current !== null) {
+            window.clearTimeout(countdownTimerRef.current);
+            countdownTimerRef.current = null;
+          }
+          setCountdownStep('');
+          setMmMatchedOpponent(null);
+          setOpponentNotice(null);
+          setMmRematchState(ev.opponentConnected ? 'idle' : 'opponent_left');
+
+          const serverP1Stats: PlayerStats = {
+            score: ev.myStats.score,
+            level: ev.myStats.level,
+            kos: ev.myStats.kos,
+            linesCleared: ev.myStats.linesCleared,
+            maxCombo: ev.myStats.maxCombo,
+            garbageSent: ev.myStats.garbageSent,
+            quads: ev.myStats.quads,
+            piecesPlaced: ev.myStats.piecesPlaced,
+            bombChains: p1Ref.current.stats.bombChains,
+          };
+          const serverP2Stats: PlayerStats = {
+            score: ev.opponentStats.score,
+            level: ev.opponentStats.level,
+            kos: ev.opponentStats.kos,
+            linesCleared: ev.opponentStats.linesCleared,
+            maxCombo: ev.opponentStats.maxCombo,
+            garbageSent: ev.opponentStats.garbageSent,
+            quads: ev.opponentStats.quads,
+            piecesPlaced: ev.opponentStats.piecesPlaced,
+            bombChains: 0,
+          };
+          p1Ref.current.stats = serverP1Stats;
+          p2Ref.current.stats = serverP2Stats;
+          syncHuds();
+
+          const winnerOverride: PlayerId | 'draw' =
+            ev.outcome === 'win' ? 'p1' : ev.outcome === 'loss' ? 'p2' : 'draw';
+
+          finishMatch(ev.finishReason || 'Match Complete', undefined, {
+            winnerOverride,
+            p1Stats: serverP1Stats,
+            p2Stats: serverP2Stats,
+            durationMs: ev.durationMs,
+          });
+          void refreshQuickMatchRecord();
+          break;
+        }
+
+        case 'rematch:status':
+          if (ev.myReady) {
+            setMmRematchState('waiting_for_rival');
+          } else if (ev.opponentReady) {
+            setMmRematchState('rival_ready');
+          } else {
+            setMmRematchState('idle');
+          }
+          break;
+
+        case 'rematch:opponent_left':
+        case 'rematch:expired':
+          setMmRematchState('opponent_left');
+          break;
+
+        case 'auth:error':
+          setMmStatus('error');
+          setMmEnqueuedAtMs(null);
+          setMmError(ev.message || 'Sign in required for 1v1 Online Matchmaking.');
+          openAuthGate(
+            'quick_match',
+            ev.message || 'Please sign in to access 1v1 Online Matchmaking.'
+          );
+          break;
+
+        case 'error':
+          if (phaseRef.current === 'MATCHMAKING') {
+            setMmError(ev.message);
+            setMmStatus('error');
+            setMmEnqueuedAtMs(null);
+          }
+          break;
+      }
+    },
+    [
+      finishMatch,
+      flushLocalOnlineSync,
+      openAuthGate,
+      pushCallout,
+      pushFeed,
+      refreshQuickMatchRecord,
+      spawnKOParticles,
+      startQuickMatchCountdown,
+      syncHuds,
+    ]
+  );
+
+  mmEventHandlerRef.current = handleMatchmakingEvent;
+
+  const ensureQuickMatchClient = useCallback((): MatchmakingSocketClient => {
+    if (mmClientRef.current) return mmClientRef.current;
+    const client = new MatchmakingSocketClient({
+      onEvent: (ev) => mmEventHandlerRef.current(ev),
+      onConnectionChange: (connStatus, detail) => {
+        if (connStatus === 'disconnected') {
+          if (phaseRef.current === 'MATCHMAKING') {
+            setMmStatus('idle');
+            setMmEnqueuedAtMs(null);
+            if (detail) setMmError(detail);
+          } else if (
+            configRef.current.mode === 'quick_match' &&
+            (phaseRef.current === 'PLAYING' || phaseRef.current === 'COUNTDOWN')
+          ) {
+            setOpponentNotice(detail || 'Connection lost — attempting to reconnect...');
+          }
+        } else if (connStatus === 'connecting' && detail) {
+          if (configRef.current.mode === 'quick_match' && phaseRef.current === 'PLAYING') {
+            setOpponentNotice(detail);
+          }
+        } else if (connStatus === 'connected') {
+          if (configRef.current.mode === 'quick_match' && phaseRef.current === 'PLAYING') {
+            setOpponentNotice(null);
+          }
+        }
+      },
+    });
+    mmClientRef.current = client;
+    return client;
+  }, []);
+
+  const handleStartQuickSearch = useCallback(
+    async (overrideMatchType?: MatchConfig['matchType']) => {
+      soundEngine.unlock();
+      if (!isBrowserOnline) {
+        setMmError(
+          'You are offline. Automatic 1v1 Online Matchmaking requires an internet connection.'
+        );
+        setMmStatus('error');
+        return;
+      }
+
+      const currentUser = authUserRef.current;
+      if (!currentUser) {
+        setMmStatus('idle');
+        setMmEnqueuedAtMs(null);
+        openAuthGate(
+          'quick_match',
+          'Sign in to enter Automatic 1v1 Online Matchmaking and record verified wins, losses, and rankings.'
+        );
+        return;
+      }
+
+      const cleanName = sanitizeNickname(nicknameRef.current, 'Player');
+      handleChangeNickname(cleanName);
+      const targetMatchType = overrideMatchType ?? configRef.current.matchType;
+
+      setMmError(null);
+      setMmInfoNotice(null);
+      setMmMatchedOpponent(null);
+      setMmStatus('connecting');
+
+      try {
+        const client = ensureQuickMatchClient();
+        await client.connect({
+          user: currentUser,
+          nickname: cleanName,
+          playerLevel: profileRef.current.level,
+        });
+        const sent = client.joinQueue({
+          matchType: targetMatchType,
+          nickname: cleanName,
+          playerLevel: profileRef.current.level,
+        });
+        if (!sent) {
+          throw new Error('Could not send matchmaking queue request.');
+        }
+      } catch (err) {
+        setMmStatus('error');
+        setMmEnqueuedAtMs(null);
+        setMmError(
+          err instanceof Error
+            ? err.message
+            : 'Unable to connect to the live 1v1 matchmaking server.'
+        );
+      }
+    },
+    [ensureQuickMatchClient, handleChangeNickname, isBrowserOnline, openAuthGate]
+  );
+
+  const handleOpenQuickMatch = useCallback(
+    (autoSearch = true) => {
+      soundEngine.unlock();
+      if (!isBrowserOnline) {
+        setOfflineOnlineNotice(
+          'You are offline. Automatic 1v1 Online Matchmaking requires an internet connection — switch to 1 Player vs. AI or 2 Player Local to play offline right now.'
+        );
+        return;
+      }
+      if (!authUserRef.current) {
+        openAuthGate(
+          'quick_match',
+          'Sign in to enter Automatic 1v1 Online Matchmaking and save your wins, losses, and rank.'
+        );
+        return;
+      }
+      setOfflineOnlineNotice(null);
+      setMmError(null);
+      setMmInfoNotice(null);
+      setMmMatchedOpponent(null);
+      setConfig((prev) => ({ ...prev, mode: 'quick_match' }));
+      configRef.current = { ...configRef.current, mode: 'quick_match' };
+      phaseRef.current = 'MATCHMAKING';
+      setPhase('MATCHMAKING');
+      void refreshQuickMatchRecord();
+      if (autoSearch) {
+        void handleStartQuickSearch(configRef.current.matchType);
+      }
+    },
+    [handleStartQuickSearch, isBrowserOnline, openAuthGate, refreshQuickMatchRecord]
+  );
+
+  const handleOpenOnlineLobby = useCallback(() => {
+    soundEngine.unlock();
+    if (!isBrowserOnline) {
+      setOfflineOnlineNotice(
+        'You are offline. Online 1v1 Room Battle requires an internet connection — switch to 1 Player vs. AI or 2 Player Local to play offline right now.'
+      );
+      return;
+    }
+    if (!authUserRef.current) {
+      openAuthGate(
+        'online_room',
+        'Sign in to create or join Private Online 1v1 Rooms with verified player accounts.'
+      );
+      return;
+    }
+    setOfflineOnlineNotice(null);
+    setOnlineError(null);
+    setConfig((prev) => ({ ...prev, mode: 'online_1v1' }));
+    configRef.current = { ...configRef.current, mode: 'online_1v1' };
+    phaseRef.current = 'ONLINE_LOBBY';
+    setPhase('ONLINE_LOBBY');
+  }, [isBrowserOnline, openAuthGate]);
+
+  const handleAuthSuccess = useCallback(
+    (user: User) => {
+      const pending = authModalState.pendingAction;
+      setAuthModalState({ open: false, reason: null, pendingAction: null });
+      authUserRef.current = user;
+      setAuthUser(user);
+
+      if (pendingMarketplaceAuthResolveRef.current) {
+        const resolve = pendingMarketplaceAuthResolveRef.current;
+        pendingMarketplaceAuthResolveRef.current = null;
+        resolve(true);
+      }
+
+      void hydrateAuthenticatedAccount(user).then(() => {
+        if (pending === 'quick_match') {
+          handleOpenQuickMatch(true);
+        } else if (pending === 'online_room') {
+          handleOpenOnlineLobby();
+        } else if (pending === 'account') {
+          setAccountModalOpen(true);
+        }
+      });
+    },
+    [
+      authModalState.pendingAction,
+      handleOpenOnlineLobby,
+      handleOpenQuickMatch,
+      hydrateAuthenticatedAccount,
+    ]
+  );
+
+  const handleCloseAuthModal = useCallback(() => {
+    setAuthModalState({ open: false, reason: null, pendingAction: null });
+    if (pendingMarketplaceAuthResolveRef.current) {
+      const resolve = pendingMarketplaceAuthResolveRef.current;
+      pendingMarketplaceAuthResolveRef.current = null;
+      resolve(false);
+    }
+  }, []);
+
+  const handleSavePlayerIdentity = useCallback(
+    async (updates: {
+      username: string;
+      avatarId: AvatarId;
+    }): Promise<{ ok: boolean; message?: string }> => {
+      const currentUser = authUserRef.current;
+      if (!currentUser) {
+        return { ok: false, message: 'Please sign in to update your profile.' };
+      }
+      const res = await updateServerPlayerIdentity(currentUser, updates);
+      if (!res.ok) {
+        return { ok: false, message: res.message };
+      }
+      const synced = await syncProfileWithFirestore(currentUser, res.profile, mmRecordRef.current);
+      applyCloudProfileToLocal(synced);
+      return { ok: true };
+    },
+    [applyCloudProfileToLocal]
+  );
+
+  const handleProvidersChanged = useCallback(async () => {
+    const currentUser = auth.currentUser ?? authUserRef.current;
+    if (!currentUser) return;
+    await currentUser.reload();
+    await currentUser.getIdToken(true);
+    setAuthUser(auth.currentUser);
+    authUserRef.current = auth.currentUser;
+    if (auth.currentUser) {
+      await hydrateAuthenticatedAccount(auth.currentUser);
+    }
+  }, [hydrateAuthenticatedAccount]);
+
+  const handleSignOut = useCallback(async () => {
+    setAccountModalOpen(false);
+    cleanupQuickMatchSession(true);
+    cleanupOnlineSession(true);
+    await signOutPlayer();
+    phaseRef.current = 'TITLE';
+    setPhase('TITLE');
+  }, [cleanupOnlineSession, cleanupQuickMatchSession]);
+
+  const handleCancelQuickSearch = useCallback(() => {
+    mmClientRef.current?.cancelQueue();
+    setMmStatus('idle');
+    setMmEnqueuedAtMs(null);
+    setMmError(null);
+  }, []);
+
+  const handleQuickMatchRematch = useCallback(() => {
+    const session = mmSessionRef.current;
+    const client = mmClientRef.current;
+    if (!session || !client || !client.isConnected()) {
+      setMmRematchState('opponent_left');
+      return;
+    }
+    const sent = client.requestRematch(session.matchId);
+    if (sent) {
+      setMmRematchState('waiting_for_rival');
+    } else {
+      setMmRematchState('opponent_left');
+    }
+  }, []);
+
+  const handleFindNewOpponent = useCallback(() => {
+    if (countdownTimerRef.current !== null) {
+      window.clearTimeout(countdownTimerRef.current);
+      countdownTimerRef.current = null;
+    }
+    // Keep socket open if possible, just disconnect cleanly and reconnect fresh
+    cleanupQuickMatchSession(false);
+    setSummary(null);
+    phaseRef.current = 'MATCHMAKING';
+    setPhase('MATCHMAKING');
+    void refreshQuickMatchRecord();
+    void handleStartQuickSearch(configRef.current.matchType);
+  }, [cleanupQuickMatchSession, handleStartQuickSearch, refreshQuickMatchRecord]);
+
   const handleToggleMute = useCallback(() => {
     setMuted((prev) => {
       const next = !prev;
@@ -1318,7 +2611,9 @@ export default function App() {
   }, []);
 
   const handleTogglePause = useCallback(() => {
-    if (configRef.current.mode === 'online_1v1') return;
+    if (configRef.current.mode === 'online_1v1' || configRef.current.mode === 'quick_match') {
+      return;
+    }
     if (phaseRef.current === 'PLAYING') {
       phaseRef.current = 'PAUSED';
       setPhase('PAUSED');
@@ -1336,13 +2631,16 @@ export default function App() {
       countdownTimerRef.current = null;
     }
     cleanupOnlineSession(true);
+    cleanupQuickMatchSession(true);
     phaseRef.current = 'TITLE';
     setPhase('TITLE');
     setSummary(null);
     setOnlineError(null);
+    setMmError(null);
+    setMmInfoNotice(null);
     p1KeysRef.current = createKeyHoldState();
     p2KeysRef.current = createKeyHoldState();
-  }, [cleanupOnlineSession]);
+  }, [cleanupOnlineSession, cleanupQuickMatchSession]);
 
   const handleCancelWaitingRoom = useCallback(() => {
     cleanupOnlineSession(true);
@@ -1355,6 +2653,7 @@ export default function App() {
       if (
         phaseRef.current === 'TITLE' ||
         phaseRef.current === 'ONLINE_LOBBY' ||
+        phaseRef.current === 'MATCHMAKING' ||
         phaseRef.current === 'SUMMARY'
       ) {
         return;
@@ -1363,6 +2662,7 @@ export default function App() {
       if (e.code === 'Escape' || e.code === 'KeyP') {
         if (
           configRef.current.mode !== 'online_1v1' &&
+          configRef.current.mode !== 'quick_match' &&
           (phaseRef.current === 'PLAYING' || phaseRef.current === 'PAUSED')
         ) {
           e.preventDefault();
@@ -1382,7 +2682,7 @@ export default function App() {
       const p1k = p1KeysRef.current;
       const p2k = p2KeysRef.current;
 
-      if (mode === 'vs_ai' || mode === 'online_1v1') {
+      if (mode === 'vs_ai' || mode === 'online_1v1' || mode === 'quick_match') {
         // Player 1 exact bindings: Arrows, Up/X CW, Z CCW, Space Hard Drop, C/Shift Hold
         switch (e.code) {
           case 'ArrowLeft':
@@ -1554,7 +2854,7 @@ export default function App() {
         k.arrMs = 0;
       };
 
-      if (mode === 'vs_ai' || mode === 'online_1v1') {
+      if (mode === 'vs_ai' || mode === 'online_1v1' || mode === 'quick_match') {
         if (e.code === 'ArrowLeft') releaseLeft(p1k);
         if (e.code === 'ArrowRight') releaseRight(p1k);
         if (e.code === 'ArrowDown') p1k.down = false;
@@ -1755,10 +3055,16 @@ export default function App() {
 
       if (phaseRef.current === 'PLAYING') {
         const cfg = configRef.current;
-        const isOnline = cfg.mode === 'online_1v1';
+        const isRoomOnline = cfg.mode === 'online_1v1';
+        const isQuickMatch = cfg.mode === 'quick_match';
+        const isOnline = isRoomOnline || isQuickMatch;
         const session = onlineSessionRef.current;
+        const mmSession = mmSessionRef.current;
 
-        if (isOnline && session && session.matchStartAtMs > 0) {
+        if (isQuickMatch && mmSession && mmSession.matchStartAtMs > 0) {
+          const offset = mmClientRef.current?.serverClockOffsetMs ?? 0;
+          elapsedMsRef.current = Math.max(0, Date.now() + offset - mmSession.matchStartAtMs);
+        } else if (isRoomOnline && session && session.matchStartAtMs > 0) {
           elapsedMsRef.current = Math.max(0, Date.now() - session.matchStartAtMs);
         } else {
           elapsedMsRef.current += dtMs;
@@ -1769,9 +3075,12 @@ export default function App() {
           const remaining = MATCH_DURATION_MS - elapsedMsRef.current;
           if (remaining <= 0) {
             if (!suddenDeathRef.current) {
-              if (p1Ref.current.stats.kos !== p2Ref.current.stats.kos) {
+              if (isQuickMatch) {
+                // Server authoritatively emits match:finished or match:sudden_death
                 setClockDisplay('0:00');
-                if (isOnline && session) {
+              } else if (p1Ref.current.stats.kos !== p2Ref.current.stats.kos) {
+                setClockDisplay('0:00');
+                if (isRoomOnline && session) {
                   // Host resolves authoritatively; guest acts as 1.5s fallback
                   if (session.role === 'host' || remaining < -1500) {
                     const p1Won = p1Ref.current.stats.kos > p2Ref.current.stats.kos;
@@ -1799,7 +3108,7 @@ export default function App() {
                 pushCallout('p1', 'SUDDEN DEATH!', 'ko', 'Next KO Wins');
                 pushCallout('p2', 'SUDDEN DEATH!', 'ko', 'Next KO Wins');
                 pushFeed('p1', 'Sudden Death — Next KO wins!');
-                if (isOnline && session && session.role === 'host') {
+                if (isRoomOnline && session && session.role === 'host') {
                   void triggerRoomSuddenDeath(session.roomCode);
                 }
               }
@@ -1849,8 +3158,15 @@ export default function App() {
             tickBoardPhysics(p2Ref.current, p1Ref.current, p2Gravity, dtMs);
           }
 
-          // Online real-time throttled state flush + heartbeat + disconnect monitor
-          if (isOnline && session) {
+          // Quick Match real-time WebSocket state flush
+          if (isQuickMatch && mmSession) {
+            if (onlineDirtyRef.current) {
+              flushLocalOnlineSync(false);
+            }
+          }
+
+          // Private Room Firestore throttled state flush + heartbeat + disconnect monitor
+          if (isRoomOnline && session) {
             if (onlineDirtyRef.current) {
               flushLocalOnlineSync(false);
             }
@@ -1910,61 +3226,170 @@ export default function App() {
     syncHuds,
   ]);
 
+  const ownedPremiumSkinsCount = PREMIUM_SKIN_CATALOG.filter((s) =>
+    skinInventory.ownedSkinIds.includes(s.id)
+  ).length;
+
+  const accountAndAuthModals = (
+    <>
+      {authModalState.open && (
+        <AuthModal
+          theme={theme}
+          reason={authModalState.reason}
+          hasGuestProgress={hasGuestProgressToMigrate(profile)}
+          onSuccess={handleAuthSuccess}
+          onClose={handleCloseAuthModal}
+        />
+      )}
+      {accountModalOpen && authUser && (
+        <PlayerAccountModal
+          theme={theme}
+          user={authUser}
+          cloudProfile={cloudProfile}
+          onlineRecord={mmRecord}
+          onlineHistory={mmHistory}
+          onSaveIdentity={handleSavePlayerIdentity}
+          onProvidersChanged={handleProvidersChanged}
+          onSignOut={handleSignOut}
+          onClose={() => setAccountModalOpen(false)}
+        />
+      )}
+    </>
+  );
+
   if (phase === 'TITLE') {
     return (
-      <StartScreen
-        config={config}
-        profile={profile}
-        onChangeConfig={(next) => {
-          setConfig(next);
-          if (next.mode !== 'online_1v1') {
-            setOfflineOnlineNotice(null);
-          }
-        }}
-        onStart={() => {
-          if (config.mode === 'online_1v1') {
-            if (!isBrowserOnline) {
-              setOfflineOnlineNotice(
-                'You are offline. Online 1v1 Room Battle requires an internet connection — switch to 1 Player vs. AI or 2 Player Local to play offline right now.'
+      <>
+        <StartScreen
+          config={config}
+          profile={profile}
+          isSignedIn={Boolean(authUser)}
+          equippedSkinId={skinInventory.equippedSkinId}
+          ownedSkinsCount={ownedPremiumSkinsCount}
+          reducedEffects={skinInventory.reducedEffects}
+          onOpenAuth={() => {
+            soundEngine.unlock();
+            openAuthGate(
+              null,
+              'Sign in to sync your profile across devices, unlock your Permanent Player ID, and play 1v1 Online.'
+            );
+          }}
+          onOpenAccount={() => {
+            soundEngine.unlock();
+            if (authUserRef.current) {
+              setAccountModalOpen(true);
+            } else {
+              openAuthGate(
+                'account',
+                'Sign in to view your Permanent Player ID, customize your Arena Crest, and sync progress across devices.'
               );
-              return;
             }
-            setOfflineOnlineNotice(null);
-            setOnlineError(null);
-            phaseRef.current = 'ONLINE_LOBBY';
-            setPhase('ONLINE_LOBBY');
-          } else {
-            setOfflineOnlineNotice(null);
-            startMatch(config);
-          }
-        }}
-        muted={muted}
-        onToggleMute={handleToggleMute}
-        offlineOnlineNotice={offlineOnlineNotice}
-      />
+          }}
+          onOpenShop={() => {
+            soundEngine.unlock();
+            setShopOpen(true);
+          }}
+          onPlayOnlineQuickMatch={() => handleOpenQuickMatch(true)}
+          onChangeConfig={(next) => {
+            setConfig(next);
+            if (next.mode !== 'online_1v1' && next.mode !== 'quick_match') {
+              setOfflineOnlineNotice(null);
+            }
+          }}
+          onStart={() => {
+            if (config.mode === 'quick_match') {
+              handleOpenQuickMatch(true);
+            } else if (config.mode === 'online_1v1') {
+              handleOpenOnlineLobby();
+            } else {
+              setOfflineOnlineNotice(null);
+              startMatch(config);
+            }
+          }}
+          muted={muted}
+          onToggleMute={handleToggleMute}
+          offlineOnlineNotice={offlineOnlineNotice}
+        />
+        {shopOpen && (
+          <SkinShopModal
+            theme={theme}
+            inventory={skinInventory}
+            gatewayConfigured={gatewayConfigured}
+            isSignedIn={Boolean(authUser)}
+            userEmail={authUser?.email ?? authUser?.phoneNumber ?? null}
+            paymentBanner={paymentBanner}
+            onDismissBanner={() => setPaymentBanner(null)}
+            onSignIn={handleMarketplaceSignIn}
+            onRequestPurchase={handleRequestPurchase}
+            onEquipSkin={handleEquipSkin}
+            onToggleReducedEffects={handleToggleReducedEffects}
+            onClose={() => setShopOpen(false)}
+          />
+        )}
+        {accountAndAuthModals}
+      </>
+    );
+  }
+
+  if (phase === 'MATCHMAKING') {
+    return (
+      <>
+        <MatchmakingScreen
+          theme={theme}
+          status={mmStatus}
+          matchType={config.matchType}
+          onChangeMatchType={(matchType) => {
+            setConfig((prev) => ({ ...prev, matchType }));
+            configRef.current = { ...configRef.current, matchType };
+          }}
+          nickname={nickname}
+          playerLevel={profile.level}
+          onChangeNickname={handleChangeNickname}
+          enqueuedAtMs={mmEnqueuedAtMs}
+          matchedOpponent={mmMatchedOpponent}
+          error={mmError}
+          infoNotice={mmInfoNotice}
+          isBrowserOnline={isBrowserOnline}
+          record={mmRecord}
+          history={mmHistory}
+          muted={muted}
+          onToggleMute={handleToggleMute}
+          onStartSearch={() => void handleStartQuickSearch()}
+          onCancelSearch={handleCancelQuickSearch}
+          onOpenPrivateRoom={() => {
+            cleanupQuickMatchSession(false);
+            handleOpenOnlineLobby();
+          }}
+          onBack={handleBackToMenu}
+        />
+        {accountAndAuthModals}
+      </>
     );
   }
 
   if (phase === 'ONLINE_LOBBY') {
     return (
-      <OnlineLobbyScreen
-        theme={theme}
-        matchType={config.matchType}
-        onChangeMatchType={(matchType) => setConfig((prev) => ({ ...prev, matchType }))}
-        nickname={nickname}
-        playerLevel={profile.level}
-        onChangeNickname={handleChangeNickname}
-        waitingRoomCode={waitingRoomCode}
-        busy={onlineBusy}
-        isOnline={isBrowserOnline}
-        error={onlineError}
-        muted={muted}
-        onToggleMute={handleToggleMute}
-        onCreateRoom={() => void handleCreateOnlineRoom()}
-        onJoinRoom={(code) => void handleJoinOnlineRoom(code)}
-        onCancelWaiting={handleCancelWaitingRoom}
-        onBack={handleBackToMenu}
-      />
+      <>
+        <OnlineLobbyScreen
+          theme={theme}
+          matchType={config.matchType}
+          onChangeMatchType={(matchType) => setConfig((prev) => ({ ...prev, matchType }))}
+          nickname={nickname}
+          playerLevel={profile.level}
+          onChangeNickname={handleChangeNickname}
+          waitingRoomCode={waitingRoomCode}
+          busy={onlineBusy}
+          isOnline={isBrowserOnline}
+          error={onlineError}
+          muted={muted}
+          onToggleMute={handleToggleMute}
+          onCreateRoom={() => void handleCreateOnlineRoom()}
+          onJoinRoom={(code) => void handleJoinOnlineRoom(code)}
+          onCancelWaiting={handleCancelWaitingRoom}
+          onBack={handleBackToMenu}
+        />
+        {accountAndAuthModals}
+      </>
     );
   }
 
@@ -1972,10 +3397,14 @@ export default function App() {
   const p2Callouts = callouts.filter((c) => c.playerId === 'p2');
   const controlsDisabled = phase !== 'PLAYING';
   const isMobileLayout = layoutMode !== 'desktop';
-  const isOnlineMode = config.mode === 'online_1v1';
+  const isQuickMatch = config.mode === 'quick_match';
+  const isOnlineMode = config.mode === 'online_1v1' || isQuickMatch;
   const activeRoomCode = onlineSessionRef.current?.roomCode ?? null;
 
   const onlineRematchState: OnlineRematchState = (() => {
+    if (isQuickMatch) {
+      return mmRematchState;
+    }
     if (!isOnlineMode || !onlineRoom || !onlineSessionRef.current) return 'idle';
     if (onlineRoom.status === 'abandoned' || !onlineSyncMetaRef.current.remoteConnected) {
       return 'opponent_left';
@@ -1994,7 +3423,11 @@ export default function App() {
   })();
 
   const handleFinishEndless = () => {
-    if (isOnlineMode && onlineSessionRef.current) {
+    if (isQuickMatch && mmSessionRef.current) {
+      mmClientRef.current?.sendEndlessFinish(mmSessionRef.current.matchId);
+      return;
+    }
+    if (config.mode === 'online_1v1' && onlineSessionRef.current) {
       const session = onlineSessionRef.current;
       const p1Kos = p1Ref.current.stats.kos;
       const p2Kos = p2Ref.current.stats.kos;
@@ -2030,9 +3463,38 @@ export default function App() {
         </div>
       )}
 
-      {/* Countdown Overlay */}
+      {/* Opponent Found + Synchronized Countdown Overlay */}
       {countdownStep && (
-        <div className="pointer-events-none fixed inset-0 z-40 flex items-center justify-center">
+        <div className="pointer-events-none fixed inset-0 z-40 flex flex-col items-center justify-center gap-4 px-4">
+          {isQuickMatch && mmMatchedOpponent && (
+            <div
+              className="rounded-xl border px-4 py-2.5 text-center shadow-xl"
+              style={{
+                backgroundColor: theme.surfaceBg,
+                borderColor: theme.accentPrimary,
+                boxShadow: theme.blockGlow ? `0 0 24px ${theme.accentPrimary}33` : undefined,
+              }}
+            >
+              <div
+                className="text-[10px] font-bold tracking-widest uppercase"
+                style={{ color: theme.accentPrimary }}
+              >
+                {mmMatchedOpponent.roundNumber > 1
+                  ? `Rematch · Round ${mmMatchedOpponent.roundNumber}`
+                  : 'Opponent Found'}
+              </div>
+              <div className="font-display text-sm sm:text-base font-bold mt-0.5">
+                <span style={{ color: theme.accentP1 }}>{p1Ref.current.label}</span>
+                <span className="mx-2" style={{ color: theme.textMuted }}>
+                  vs
+                </span>
+                <span style={{ color: theme.accentP2 }}>{mmMatchedOpponent.nickname}</span>
+                <span className="ml-2 text-xs font-mono-num" style={{ color: theme.textMuted }}>
+                  Lv.{mmMatchedOpponent.level}
+                </span>
+              </div>
+            </div>
+          )}
           <div
             key={countdownStep}
             className="animate-countdown font-display text-6xl sm:text-8xl font-bold tracking-wider select-none"
@@ -2122,14 +3584,18 @@ export default function App() {
           theme={theme}
           xpResult={summary.xpResult}
           isOnline={isOnlineMode}
+          isQuickMatch={isQuickMatch}
           rematchState={onlineRematchState}
           onRematch={() => {
-            if (isOnlineMode) {
+            if (isQuickMatch) {
+              handleQuickMatchRematch();
+            } else if (isOnlineMode) {
               void handleOnlineRematch();
             } else {
               startMatch(config);
             }
           }}
+          onFindNewOpponent={isQuickMatch ? handleFindNewOpponent : undefined}
           onMainMenu={handleBackToMenu}
         />
       )}
@@ -2239,17 +3705,19 @@ export default function App() {
           className="w-full px-2.5 py-1.5 flex items-center justify-between gap-2 border-b shrink-0"
           style={{ borderColor: theme.border, backgroundColor: theme.pageBg }}
         >
-          {/* P1 Hold */}
+          {/* P1 Reserve */}
           <div
             className="flex items-center gap-1.5 px-2 py-1 rounded-lg border shrink-0"
             style={{ backgroundColor: theme.surfaceBg, borderColor: theme.border }}
           >
             <span className="text-[10px] font-bold tracking-wide" style={{ color: theme.textMuted }}>
-              HOLD
+              RES
             </span>
             <PiecePreviewCanvas
               piece={p1Hud.hold}
               theme={theme}
+              skinId={skinInventory.equippedSkinId}
+              reducedEffects={skinInventory.reducedEffects}
               cellSize={9}
               dimmed={p1Hud.holdUsed}
               width={40}
@@ -2257,19 +3725,21 @@ export default function App() {
             />
           </div>
 
-          {/* P1 Next 3 */}
+          {/* P1 Queue 3 */}
           <div
             className="flex items-center gap-1.5 px-2 py-1 rounded-lg border shrink-0"
             style={{ backgroundColor: theme.surfaceBg, borderColor: theme.border }}
           >
             <span className="text-[10px] font-bold tracking-wide" style={{ color: theme.textMuted }}>
-              NEXT
+              QUEUE
             </span>
             {[0, 1, 2].map((idx) => (
               <PiecePreviewCanvas
                 key={idx}
                 piece={p1Hud.next3[idx] ?? null}
                 theme={theme}
+                skinId={skinInventory.equippedSkinId}
+                reducedEffects={skinInventory.reducedEffects}
                 cellSize={idx === 0 ? 9 : 7}
                 width={idx === 0 ? 38 : 30}
                 height={24}
@@ -2323,6 +3793,8 @@ export default function App() {
                 theme={theme}
                 cellSize={p1CellSize}
                 accentColor={theme.accentP1}
+                skinId={skinInventory.equippedSkinId}
+                reducedEffects={skinInventory.reducedEffects}
               />
             </section>
 
@@ -2338,6 +3810,8 @@ export default function App() {
                 theme={theme}
                 cellSize={p2CellSize}
                 accentColor={theme.accentP2}
+                skinId={skinInventory.equippedSkinId}
+                reducedEffects={skinInventory.reducedEffects}
               />
 
               {/* Compact Rival Next & Difficulty Card directly under compact Rival board */}
@@ -2346,15 +3820,19 @@ export default function App() {
                 style={{ backgroundColor: theme.surfaceBg, borderColor: theme.border }}
               >
                 <span className="text-[9px] font-bold tracking-wider" style={{ color: theme.textMuted }}>
-                  {isOnlineMode
-                    ? `ROOM ${activeRoomCode ?? ''}`
-                    : config.mode === 'vs_ai'
-                      ? `${AI_PROFILES[config.difficulty].label.toUpperCase()} AI`
-                      : 'P2'}
+                  {isQuickMatch
+                    ? '1V1 LIVE'
+                    : isOnlineMode
+                      ? `ROOM ${activeRoomCode ?? ''}`
+                      : config.mode === 'vs_ai'
+                        ? `${AI_PROFILES[config.difficulty].label.toUpperCase()} AI`
+                        : 'P2'}
                 </span>
                 <PiecePreviewCanvas
                   piece={p2Hud.next3[0] ?? null}
                   theme={theme}
+                  skinId={skinInventory.equippedSkinId}
+                  reducedEffects={skinInventory.reducedEffects}
                   cellSize={7}
                   width={34}
                   height={20}
@@ -2404,11 +3882,13 @@ export default function App() {
               Block Clash: Arena
             </span>
             <span className="text-[11px] truncate" style={{ color: theme.textMuted }}>
-              {isOnlineMode
-                ? `Online Room ${activeRoomCode ?? ''}`
-                : config.mode === 'vs_ai'
-                  ? `${AI_PROFILES[config.difficulty].label} AI`
-                  : '2P Local'}
+              {isQuickMatch
+                ? '1v1 Online Quick Match'
+                : isOnlineMode
+                  ? `Online Room ${activeRoomCode ?? ''}`
+                  : config.mode === 'vs_ai'
+                    ? `${AI_PROFILES[config.difficulty].label} AI`
+                    : '2P Local'}
             </span>
           </div>
 
@@ -2494,6 +3974,8 @@ export default function App() {
                 theme={theme}
                 cellSize={p1CellSize}
                 accentColor={theme.accentP1}
+                skinId={skinInventory.equippedSkinId}
+                reducedEffects={skinInventory.reducedEffects}
               />
             </section>
 
@@ -2532,15 +4014,17 @@ export default function App() {
                 <span style={{ color: theme.accentP2 }}>{p2Hud.kos}</span>
               </div>
 
-              {/* P1 Hold & Next in Center HUD */}
+              {/* P1 Reserve & Queue in Center HUD */}
               <div className="w-full flex flex-col items-center gap-1 pt-1 border-t" style={{ borderColor: theme.border }}>
                 <span className="text-[9px] font-semibold" style={{ color: theme.textMuted }}>
-                  HOLD / NEXT
+                  RES / QUEUE
                 </span>
                 <div className="flex items-center justify-center gap-1">
                   <PiecePreviewCanvas
                     piece={p1Hud.hold}
                     theme={theme}
+                    skinId={skinInventory.equippedSkinId}
+                    reducedEffects={skinInventory.reducedEffects}
                     cellSize={8}
                     dimmed={p1Hud.holdUsed}
                     width={36}
@@ -2549,6 +4033,8 @@ export default function App() {
                   <PiecePreviewCanvas
                     piece={p1Hud.next3[0] ?? null}
                     theme={theme}
+                    skinId={skinInventory.equippedSkinId}
+                    reducedEffects={skinInventory.reducedEffects}
                     cellSize={8}
                     width={36}
                     height={22}
@@ -2597,6 +4083,8 @@ export default function App() {
                 theme={theme}
                 cellSize={p2CellSize}
                 accentColor={theme.accentP2}
+                skinId={skinInventory.equippedSkinId}
+                reducedEffects={skinInventory.reducedEffects}
               />
             </section>
           </div>
@@ -2636,7 +4124,14 @@ export default function App() {
         className="w-full max-w-[1440px] mx-auto px-4 sm:px-6 py-2.5 flex items-center justify-between gap-4 border-b shrink-0"
         style={{ borderColor: theme.border }}
       >
-        <div className="flex items-baseline gap-3 min-w-0">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <img
+            src="/icons/icon-192.png"
+            alt="Block Clash Arena Crest"
+            referrerPolicy="no-referrer"
+            className="w-6 h-6 rounded-md object-cover shrink-0 border"
+            style={{ borderColor: theme.borderStrong }}
+          />
           <span className="font-display text-lg font-bold tracking-tight whitespace-nowrap shrink-0">
             Block Clash: Arena
           </span>
@@ -2644,11 +4139,13 @@ export default function App() {
             className="hidden md:inline text-xs font-medium truncate"
             style={{ color: theme.textMuted }}
           >
-            {isOnlineMode
-              ? `Online 1v1 · Room ${activeRoomCode ?? ''}`
-              : config.mode === 'vs_ai'
-                ? `1 Player vs. ${AI_PROFILES[config.difficulty].label} AI`
-                : '2 Player Local'}{' '}
+            {isQuickMatch
+              ? '1v1 Online Quick Match'
+              : isOnlineMode
+                ? `Online 1v1 · Room ${activeRoomCode ?? ''}`
+                : config.mode === 'vs_ai'
+                  ? `1 Player vs. ${AI_PROFILES[config.difficulty].label} AI`
+                  : '2 Player Local'}{' '}
             · {config.matchType === 'ko_2min' ? '2-Min KO Battle' : 'Endless Survival'}
           </span>
         </div>
@@ -2665,7 +4162,7 @@ export default function App() {
         >
           {(['neon', 'retro', 'modern'] as ThemeId[]).map((tid) => {
             const active = config.theme === tid;
-            const shortLabel = tid === 'neon' ? 'Neon' : tid === 'retro' ? 'Retro' : 'Modern';
+            const shortLabel = tid === 'neon' ? 'Neon' : tid === 'retro' ? 'CRT' : 'Modern';
             return (
               <button
                 key={tid}
@@ -2711,10 +4208,18 @@ export default function App() {
               borderColor: theme.border,
               color: theme.textSecondary,
             }}
-            title={isOnlineMode ? 'Leave Online Room' : 'Return to Main Menu'}
+            title={
+              isQuickMatch
+                ? 'Leave Online Match'
+                : isOnlineMode
+                  ? 'Leave Online Room'
+                  : 'Return to Main Menu'
+            }
           >
             <Home className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">{isOnlineMode ? 'Leave Room' : 'Menu'}</span>
+            <span className="hidden sm:inline">
+              {isQuickMatch ? 'Leave Match' : isOnlineMode ? 'Leave Room' : 'Menu'}
+            </span>
           </button>
         </div>
       </header>
@@ -2752,6 +4257,8 @@ export default function App() {
               showTouchControls={true}
               controlsDisabled={controlsDisabled}
               onTouchAction={(action) => performPlayerAction('p1', action)}
+              skinId={skinInventory.equippedSkinId}
+              reducedEffects={skinInventory.reducedEffects}
             />
           </section>
 
@@ -2955,12 +4462,16 @@ export default function App() {
                   : undefined
               }
               controlHint={
-                isOnlineMode
-                  ? `Live Cloud Sync · Room ${activeRoomCode ?? ''}`
-                  : config.mode === 'vs_ai'
-                    ? `${AI_PROFILES[config.difficulty].label} AI · ${AI_PROFILES[config.difficulty].tagline}`
-                    : undefined
+                isQuickMatch
+                  ? 'Live 1v1 Server Sync'
+                  : isOnlineMode
+                    ? `Live Cloud Sync · Room ${activeRoomCode ?? ''}`
+                    : config.mode === 'vs_ai'
+                      ? `${AI_PROFILES[config.difficulty].label} AI · ${AI_PROFILES[config.difficulty].tagline}`
+                      : undefined
               }
+              skinId={skinInventory.equippedSkinId}
+              reducedEffects={skinInventory.reducedEffects}
             />
           </section>
         </div>

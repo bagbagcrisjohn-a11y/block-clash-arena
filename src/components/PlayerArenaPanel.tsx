@@ -1,6 +1,7 @@
 import React from 'react';
 import { ThemePalette, VISIBLE_ROWS } from '../game/constants';
 import { MAX_PLAYER_LEVEL } from '../game/progression';
+import { TileSkinId } from '../game/skins';
 import { FloatingCallout, PieceType, PlayerBoardState } from '../game/types';
 import { BoardCanvas } from './BoardCanvas';
 import { GarbageMeter } from './GarbageMeter';
@@ -41,6 +42,8 @@ interface PlayerArenaPanelProps {
   controlsDisabled?: boolean;
   onTouchAction?: (action: TouchAction) => void;
   controlHint?: string;
+  skinId?: TileSkinId;
+  reducedEffects?: boolean;
 }
 
 export const PlayerArenaPanel: React.FC<PlayerArenaPanelProps> = ({
@@ -57,6 +60,8 @@ export const PlayerArenaPanel: React.FC<PlayerArenaPanelProps> = ({
   controlsDisabled = false,
   onTouchAction,
   controlHint,
+  skinId = 'classic',
+  reducedEffects = false,
 }) => {
   const boardHeight = VISIBLE_ROWS * cellSize;
   const previewCell = Math.max(9, Math.floor(cellSize * 0.52));
@@ -82,7 +87,7 @@ export const PlayerArenaPanel: React.FC<PlayerArenaPanelProps> = ({
 
   const sideColumn = (
     <div className="flex flex-col gap-2.5 shrink-0" style={{ width: previewW + 16 }}>
-      {/* Hold Box */}
+      {/* Reserve Vault Box */}
       <div
         className="rounded-lg border p-2 flex flex-col items-center"
         style={{
@@ -94,7 +99,7 @@ export const PlayerArenaPanel: React.FC<PlayerArenaPanelProps> = ({
           className="text-[11px] font-semibold tracking-wide mb-1"
           style={{ color: theme.textMuted }}
         >
-          Hold
+          Reserve
         </span>
         <PiecePreviewCanvas
           piece={hud.hold}
@@ -103,10 +108,12 @@ export const PlayerArenaPanel: React.FC<PlayerArenaPanelProps> = ({
           dimmed={hud.holdUsed}
           width={previewW}
           height={previewH}
+          skinId={skinId}
+          reducedEffects={reducedEffects}
         />
       </div>
 
-      {/* Next 3 Queue */}
+      {/* Incoming 3 Queue */}
       <div
         className="rounded-lg border p-2 flex flex-col items-center gap-1"
         style={{
@@ -118,7 +125,7 @@ export const PlayerArenaPanel: React.FC<PlayerArenaPanelProps> = ({
           className="text-[11px] font-semibold tracking-wide mb-0.5"
           style={{ color: theme.textMuted }}
         >
-          Next
+          Queue
         </span>
         {[0, 1, 2].map((idx) => (
           <div
@@ -135,6 +142,8 @@ export const PlayerArenaPanel: React.FC<PlayerArenaPanelProps> = ({
               cellSize={idx === 0 ? previewCell : Math.max(9, previewCell - 2)}
               width={previewW}
               height={idx === 0 ? previewH : Math.max(26, previewH - 6)}
+              skinId={skinId}
+              reducedEffects={reducedEffects}
             />
           </div>
         ))}
@@ -197,6 +206,8 @@ export const PlayerArenaPanel: React.FC<PlayerArenaPanelProps> = ({
     />
   );
 
+  const frameCornerColor = hud.incomingTotal >= 4 ? theme.danger : accentColor;
+
   const playfield = (
     <div
       ref={boardContainerRef}
@@ -214,12 +225,36 @@ export const PlayerArenaPanel: React.FC<PlayerArenaPanelProps> = ({
               : 'none',
       }}
     >
+      {/* Signature Block Clash 4-Corner Machined Arena Bay Brackets */}
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute -top-px -left-px w-3 h-3 border-t-2 border-l-2 rounded-tl-md z-10"
+        style={{ borderColor: frameCornerColor }}
+      />
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute -top-px -right-px w-3 h-3 border-t-2 border-r-2 rounded-tr-md z-10"
+        style={{ borderColor: frameCornerColor }}
+      />
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute -bottom-px -left-px w-3 h-3 border-b-2 border-l-2 rounded-bl-md z-10"
+        style={{ borderColor: frameCornerColor }}
+      />
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute -bottom-px -right-px w-3 h-3 border-b-2 border-r-2 rounded-br-md z-10"
+        style={{ borderColor: frameCornerColor }}
+      />
+
       <BoardCanvas
         boardRef={boardRef}
         theme={theme}
         cellSize={cellSize}
         accentColor={accentColor}
         isMythicLegend={(hud.playerLevel ?? 1) >= MAX_PLAYER_LEVEL}
+        skinId={skinId}
+        reducedEffects={reducedEffects}
       />
 
       {/* Floating Callouts */}
@@ -337,7 +372,7 @@ export const PlayerArenaPanel: React.FC<PlayerArenaPanelProps> = ({
               className="font-mono-num text-xs font-bold whitespace-nowrap"
               style={{ color: theme.danger }}
             >
-              +{hud.incomingTotal} Threat
+              +{hud.incomingTotal} Breach
             </span>
           )}
           <div className="flex items-baseline gap-1">

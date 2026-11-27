@@ -34,8 +34,10 @@ interface MatchSummaryModalProps {
   theme: ThemePalette;
   xpResult?: MatchXPResult | null;
   isOnline?: boolean;
+  isQuickMatch?: boolean;
   rematchState?: OnlineRematchState;
   onRematch: () => void;
+  onFindNewOpponent?: () => void;
   onMainMenu: () => void;
 }
 
@@ -68,8 +70,10 @@ export const MatchSummaryModal: React.FC<MatchSummaryModalProps> = ({
   theme,
   xpResult = null,
   isOnline = false,
+  isQuickMatch = false,
   rematchState = 'idle',
   onRematch,
+  onFindNewOpponent,
   onMainMenu,
 }) => {
   const [displayLevel, setDisplayLevel] = useState<number>(xpResult?.beforeLevel ?? 1);
@@ -231,7 +235,7 @@ export const MatchSummaryModal: React.FC<MatchSummaryModalProps> = ({
       p1: p1Stats.maxCombo >= 2 ? `${p1Stats.maxCombo}x` : '—',
       p2: p2Stats.maxCombo >= 2 ? `${p2Stats.maxCombo}x` : '—',
     },
-    { label: 'Garbage Sent', p1: p1Stats.garbageSent, p2: p2Stats.garbageSent },
+    { label: 'Breach Sent', p1: p1Stats.garbageSent, p2: p2Stats.garbageSent },
   ];
 
   const activeTier = getRankTier(displayLevel);
@@ -480,42 +484,59 @@ export const MatchSummaryModal: React.FC<MatchSummaryModalProps> = ({
               color: theme.textMuted,
             }}
           >
-            {p2Label} left the room. Return to menu to start a new room.
+            {isQuickMatch
+              ? `${p2Label} left the match. Tap Find New Opponent to re-enter the queue.`
+              : `${p2Label} left the room. Return to menu to start a new room.`}
           </div>
         )}
 
         {/* Actions */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <button
-            type="button"
-            onClick={onRematch}
-            disabled={
-              isOnline && (rematchState === 'waiting_for_rival' || rematchState === 'opponent_left')
-            }
-            className="h-12 px-5 rounded-xl font-display font-bold text-sm tracking-wide flex items-center justify-center gap-2 transition-transform active:scale-[0.98] cursor-pointer whitespace-nowrap disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2"
-            style={{
-              backgroundColor: theme.accentPrimary,
-              color: theme.accentPrimaryText,
-            }}
-          >
-            {isOnline && rematchState === 'waiting_for_rival' ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                <span>Waiting for Rival...</span>
-              </>
-            ) : (
-              <>
-                <RotateCcw className="w-4 h-4" />
-                <span>
-                  {isOnline
-                    ? rematchState === 'rival_ready'
-                      ? 'Play Again (Ready!)'
-                      : 'Play Again'
-                    : 'Rematch'}
-                </span>
-              </>
-            )}
-          </button>
+          {isQuickMatch && rematchState === 'opponent_left' && onFindNewOpponent ? (
+            <button
+              type="button"
+              onClick={onFindNewOpponent}
+              className="h-12 px-5 rounded-xl font-display font-bold text-sm tracking-wide flex items-center justify-center gap-2 transition-transform active:scale-[0.98] cursor-pointer whitespace-nowrap focus-visible:outline-2 focus-visible:outline-offset-2"
+              style={{
+                backgroundColor: theme.accentPrimary,
+                color: theme.accentPrimaryText,
+              }}
+            >
+              <RotateCcw className="w-4 h-4" />
+              <span>Find New Opponent</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={onRematch}
+              disabled={
+                isOnline && (rematchState === 'waiting_for_rival' || rematchState === 'opponent_left')
+              }
+              className="h-12 px-5 rounded-xl font-display font-bold text-sm tracking-wide flex items-center justify-center gap-2 transition-transform active:scale-[0.98] cursor-pointer whitespace-nowrap disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2"
+              style={{
+                backgroundColor: theme.accentPrimary,
+                color: theme.accentPrimaryText,
+              }}
+            >
+              {isOnline && rematchState === 'waiting_for_rival' ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Waiting for Rival...</span>
+                </>
+              ) : (
+                <>
+                  <RotateCcw className="w-4 h-4" />
+                  <span>
+                    {isOnline
+                      ? rematchState === 'rival_ready'
+                        ? 'Play Again (Ready!)'
+                        : 'Play Again'
+                      : 'Rematch'}
+                  </span>
+                </>
+              )}
+            </button>
+          )}
 
           <button
             type="button"
@@ -528,7 +549,7 @@ export const MatchSummaryModal: React.FC<MatchSummaryModalProps> = ({
             }}
           >
             <Home className="w-4 h-4" />
-            <span>{isOnline ? 'Leave Room' : 'Main Menu'}</span>
+            <span>{isQuickMatch ? 'Main Menu' : isOnline ? 'Leave Room' : 'Main Menu'}</span>
           </button>
         </div>
       </div>

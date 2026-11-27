@@ -231,6 +231,78 @@
   animation: confettiSparkFly 0.95s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
+@keyframes skinSheenSweep {
+  0% {
+    transform: translateX(-140%) skewX(-24deg);
+  }
+  45%, 100% {
+    transform: translateX(220%) skewX(-24deg);
+  }
+}
+
+.skin-sheen-sweep {
+  animation: skinSheenSweep 3.4s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+}
+
+@keyframes skinLavaPulse {
+  0%, 100% {
+    filter: brightness(1) saturate(1.05);
+  }
+  50% {
+    filter: brightness(1.24) saturate(1.25);
+  }
+}
+
+.skin-lava-pulse {
+  animation: skinLavaPulse 2.2s ease-in-out infinite;
+}
+
+@keyframes skinStarTwinkle {
+  0%, 100% {
+    opacity: 0.25;
+    transform: scale(0.75);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.25);
+  }
+}
+
+.skin-star-twinkle {
+  animation: skinStarTwinkle 2.1s ease-in-out infinite;
+}
+
+@keyframes skinParticleRise {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 10px, 0) scale(0.6);
+  }
+  25% {
+    opacity: 0.95;
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(0, -24px, 0) scale(1.1);
+  }
+}
+
+.skin-particle-rise {
+  animation: skinParticleRise 2.4s ease-out infinite;
+}
+
+@keyframes skinPrismaticCycle {
+  0% {
+    filter: hue-rotate(0deg) saturate(1.15);
+  }
+  100% {
+    filter: hue-rotate(360deg) saturate(1.15);
+  }
+}
+
+.skin-prismatic-cycle {
+  animation: skinPrismaticCycle 4.6s linear infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-callout,
   .animate-countdown,
@@ -239,8 +311,14 @@
   .rank-mythic-bar,
   .rank-mythic-border,
   .animate-level-up,
-  .confetti-spark {
+  .confetti-spark,
+  .skin-sheen-sweep,
+  .skin-lava-pulse,
+  .skin-star-twinkle,
+  .skin-particle-rise,
+  .skin-prismatic-cycle {
     animation-duration: 0.01ms !important;
   }
 }
+
 

@@ -17,7 +17,7 @@ export const SOFT_DROP_INTERVAL_MS = 40;
 
 export const ALL_PIECES: PieceType[] = ['I', 'O', 'T', 'S', 'Z', 'J', 'L'];
 
-// SRS standard piece shapes in 4 rotation states (0: spawn, 1: R, 2: 2, 3: L)
+// Block Clash piece rotation matrices in 4 states (0: spawn, 1: R, 2: 2, 3: L)
 // Coordinates are [colOffset, rowOffset] relative to active piece (x, y)
 export const PIECE_SHAPES: Record<PieceType, Array<Array<[number, number]>>> = {
   I: [
@@ -64,7 +64,7 @@ export const PIECE_SHAPES: Record<PieceType, Array<Array<[number, number]>>> = {
   ],
 };
 
-// SRS Wall Kick offsets [dx, dy] (note: +dy is DOWN in screen grid coordinates)
+// Piece pivot kick offsets [dx, dy] (note: +dy is DOWN in screen grid coordinates)
 export const JLSTZ_KICKS: Record<string, Array<[number, number]>> = {
   '0>1': [[0, 0], [-1, 0], [-1, -1], [0, 2], [-1, 2]],
   '1>0': [[0, 0], [1, 0], [1, 1], [0, -2], [1, -2]],
@@ -216,52 +216,53 @@ export const THEMES: Record<ThemeId, ThemePalette> = {
     blockGlow: true,
     retroPattern: false,
     pieces: {
-      I: { fill: '#06B6D4', light: '#67E8F9', dark: '#0E7490', stroke: '#22D3EE' },
-      O: { fill: '#EAB308', light: '#FEF08A', dark: '#A16207', stroke: '#FACC15' },
-      T: { fill: '#A855F7', light: '#D8B4FE', dark: '#6B21A8', stroke: '#C084FC' },
-      S: { fill: '#22C55E', light: '#86EFAC', dark: '#15803D', stroke: '#4ADE80' },
-      Z: { fill: '#F43F5E', light: '#FDA4AF', dark: '#BE123C', stroke: '#FB7185' },
-      J: { fill: '#3B82F6', light: '#93C5FD', dark: '#1D4ED8', stroke: '#60A5FA' },
-      L: { fill: '#F97316', light: '#FDBA74', dark: '#C2410C', stroke: '#FB923C' },
-      G: { fill: '#475569', light: '#64748B', dark: '#1E293B', stroke: '#94A3B8' },
-      B: { fill: '#991B1B', light: '#FB923C', dark: '#450A0A', stroke: '#F97316' },
+      // Original Block Clash Signature Palette (distinct from standard falling-block color conventions)
+      I: { fill: '#EC4899', light: '#F9A8D4', dark: '#9D174D', stroke: '#F472B6' }, // Plasma Magenta
+      O: { fill: '#10B981', light: '#6EE7B7', dark: '#047857', stroke: '#34D399' }, // Electric Mint
+      T: { fill: '#F59E0B', light: '#FDE68A', dark: '#B45309', stroke: '#FBBF24' }, // Solar Amber
+      S: { fill: '#3B82F6', light: '#93C5FD', dark: '#1D4ED8', stroke: '#60A5FA' }, // Cobalt Sapphire
+      Z: { fill: '#06B6D4', light: '#A5F3FC', dark: '#0E7490', stroke: '#22D3EE' }, // Arctic Cyan
+      J: { fill: '#A855F7', light: '#E9D5FF', dark: '#6B21A8', stroke: '#C084FC' }, // Orchid Violet
+      L: { fill: '#84CC16', light: '#D9F99D', dark: '#4D7C0F', stroke: '#A3E635' }, // Volt Lime
+      G: { fill: '#334155', light: '#64748B', dark: '#0F172A', stroke: '#475569' }, // Armored Breach Alloy
+      B: { fill: '#7C2D12', light: '#FDE047', dark: '#2A0B05', stroke: '#F59E0B' }, // Volatile Energy Core
     },
   },
   retro: {
     id: 'retro',
-    name: 'Retro Handheld',
-    subtitle: 'Classic 4-shade dot-matrix LCD',
-    isDark: false,
-    pageBg: '#B8C496',
-    surfaceBg: '#C8D3A8',
-    surfaceElevated: '#D3DDB7',
-    border: 'rgba(31, 41, 24, 0.25)',
-    borderStrong: 'rgba(31, 41, 24, 0.65)',
-    textPrimary: '#1A2314',
-    textSecondary: '#303D24',
-    textMuted: '#4C5A3B',
-    accentP1: '#1A2314',
-    accentP2: '#3B482B',
-    accentPrimary: '#1A2314',
-    accentPrimaryText: '#D3DDB7',
-    danger: '#7A271A',
-    warning: '#69410C',
-    boardBg: '#CBD6AE',
-    boardGridLine: 'rgba(31, 41, 24, 0.09)',
-    boardTopLine: 'rgba(31, 41, 24, 0.4)',
+    name: 'Amber CRT',
+    subtitle: 'Warm phosphor vector cabinet',
+    isDark: true,
+    pageBg: '#100B06',
+    surfaceBg: '#1A120A',
+    surfaceElevated: '#24190E',
+    border: 'rgba(245, 158, 11, 0.22)',
+    borderStrong: 'rgba(251, 191, 36, 0.48)',
+    textPrimary: '#FEF3C7',
+    textSecondary: '#FCD34D',
+    textMuted: '#B48A4E',
+    accentP1: '#FBBF24',
+    accentP2: '#FB7185',
+    accentPrimary: '#F59E0B',
+    accentPrimaryText: '#140B04',
+    danger: '#F43F5E',
+    warning: '#FBBF24',
+    boardBg: '#0B0704',
+    boardGridLine: 'rgba(245, 158, 11, 0.11)',
+    boardTopLine: 'rgba(244, 63, 94, 0.55)',
     ghostAlpha: 0.34,
-    blockGlow: false,
+    blockGlow: true,
     retroPattern: true,
     pieces: {
-      I: { fill: '#304022', light: '#9AA876', dark: '#1A2314', stroke: '#1A2314' },
-      O: { fill: '#1A2314', light: '#6B7A4D', dark: '#11180D', stroke: '#1A2314' },
-      T: { fill: '#465632', light: '#B0BD8D', dark: '#1A2314', stroke: '#1A2314' },
-      S: { fill: '#5D6E43', light: '#B0BD8D', dark: '#233018', stroke: '#1A2314' },
-      Z: { fill: '#2B3A1E', light: '#879663', dark: '#141D0E', stroke: '#1A2314' },
-      J: { fill: '#3A4A28', light: '#A0AE7E', dark: '#1A2314', stroke: '#1A2314' },
-      L: { fill: '#52633B', light: '#BCC99A', dark: '#1F2A16', stroke: '#1A2314' },
-      G: { fill: '#7B8A5C', light: '#99A878', dark: '#304022', stroke: '#1A2314' },
-      B: { fill: '#7A271A', light: '#F59E0B', dark: '#1A2314', stroke: '#1A2314' },
+      I: { fill: '#F59E0B', light: '#FEF3C7', dark: '#78350F', stroke: '#FBBF24' },
+      O: { fill: '#D97706', light: '#FDE68A', dark: '#6B2A06', stroke: '#F59E0B' },
+      T: { fill: '#EA580C', light: '#FED7AA', dark: '#7C2D12', stroke: '#FB923C' },
+      S: { fill: '#EAB308', light: '#FEF9C3', dark: '#713F12', stroke: '#FACC15' },
+      Z: { fill: '#FB7185', light: '#FFE4E6', dark: '#881337', stroke: '#FDA4AF' },
+      J: { fill: '#C2410C', light: '#FDBA74', dark: '#5C1B05', stroke: '#F97316' },
+      L: { fill: '#CA8A04', light: '#FEF08A', dark: '#5C3D04', stroke: '#EAB308' },
+      G: { fill: '#443222', light: '#927252', dark: '#1C130B', stroke: '#785A3D' },
+      B: { fill: '#991B1B', light: '#FEF08A', dark: '#3B0808', stroke: '#FB923C' },
     },
   },
   modern: {
@@ -277,7 +278,7 @@ export const THEMES: Record<ThemeId, ThemePalette> = {
     textPrimary: '#0F172A',
     textSecondary: '#334155',
     textMuted: '#64748B',
-    accentP1: '#0284C7',
+    accentP1: '#0D9488',
     accentP2: '#E11D48',
     accentPrimary: '#0F172A',
     accentPrimaryText: '#FFFFFF',
@@ -286,19 +287,20 @@ export const THEMES: Record<ThemeId, ThemePalette> = {
     boardBg: '#FFFFFF',
     boardGridLine: 'rgba(15, 23, 42, 0.06)',
     boardTopLine: 'rgba(225, 29, 72, 0.35)',
-    ghostAlpha: 0.25,
+    ghostAlpha: 0.26,
     blockGlow: false,
     retroPattern: false,
     pieces: {
-      I: { fill: '#0284C7', light: '#7DD3FC', dark: '#0369A1', stroke: '#0EA5E9' },
-      O: { fill: '#D97706', light: '#FDE68A', dark: '#B45309', stroke: '#F59E0B' },
-      T: { fill: '#7C3AED', light: '#DDD6FE', dark: '#5B21B6', stroke: '#8B5CF6' },
-      S: { fill: '#059669', light: '#A7F3D0', dark: '#047857', stroke: '#10B981' },
-      Z: { fill: '#E11D48', light: '#FECDD3', dark: '#BE123C', stroke: '#F43F5E' },
-      J: { fill: '#2563EB', light: '#BFDBFE', dark: '#1D4ED8', stroke: '#3B82F6' },
-      L: { fill: '#EA580C', light: '#FED7AA', dark: '#C2410C', stroke: '#F97316' },
-      G: { fill: '#64748B', light: '#94A3B8', dark: '#475569', stroke: '#475569' },
-      B: { fill: '#991B1B', light: '#F97316', dark: '#450A0A', stroke: '#EA580C' },
+      // Studio light adaptation of the Block Clash Signature Palette
+      I: { fill: '#DB2777', light: '#FBCFE8', dark: '#9D174D', stroke: '#EC4899' }, // Plasma Magenta
+      O: { fill: '#059669', light: '#A7F3D0', dark: '#065F46', stroke: '#10B981' }, // Electric Mint
+      T: { fill: '#D97706', light: '#FDE68A', dark: '#92400E', stroke: '#F59E0B' }, // Solar Amber
+      S: { fill: '#2563EB', light: '#BFDBFE', dark: '#1E40AF', stroke: '#3B82F6' }, // Cobalt Sapphire
+      Z: { fill: '#0891B2', light: '#A5F3FC', dark: '#155E75', stroke: '#06B6D4' }, // Arctic Cyan
+      J: { fill: '#7C3AED', light: '#DDD6FE', dark: '#5B21B6', stroke: '#8B5CF6' }, // Orchid Violet
+      L: { fill: '#65A30D', light: '#D9F99D', dark: '#3F6212', stroke: '#84CC16' }, // Volt Lime
+      G: { fill: '#475569', light: '#94A3B8', dark: '#1E293B', stroke: '#334155' }, // Armored Breach Alloy
+      B: { fill: '#9A3412', light: '#FDE047', dark: '#431407', stroke: '#EA580C' }, // Volatile Energy Core
     },
   },
 };
